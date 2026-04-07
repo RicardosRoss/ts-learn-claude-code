@@ -65,7 +65,7 @@ describe("ToolRegistry", () => {
       inputSchema: { type: "object", properties: { x: { type: "string" } } }
     });
     // Ensure handler is NOT in the list output.
-    expect((definitions[0] as Record<string, unknown>).handler).toBeUndefined();
+    expect((definitions[0] as unknown as Record<string, unknown>).handler).toBeUndefined();
   });
 
   test("get() returns full RegisteredTool with handler", () => {

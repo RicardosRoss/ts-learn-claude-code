@@ -2,6 +2,9 @@ import { describe, expect, test } from "vitest";
 import { spawn } from "node:child_process";
 import path from "node:path";
 
+// REPL tests require ANTHROPIC_API_KEY — skip in CI where env vars are unavailable.
+const skipIfNoApiKey = process.env.ANTHROPIC_API_KEY ? describe : describe.skip;
+
 function runReplWithInput(inputText: string): Promise<{ code: number | null; output: string }> {
   const root = path.resolve(import.meta.dirname, "..");
   const tsxBin = path.join(root, "node_modules", ".bin", "tsx");
@@ -29,7 +32,7 @@ function runReplWithInput(inputText: string): Promise<{ code: number | null; out
   });
 }
 
-describe("repl smoke", () => {
+skipIfNoApiKey("repl smoke", () => {
   test("exits cleanly when stdin is closed", async () => {
     const result = await runReplWithInput("!bash echo hi\nexit\n");
     expect(result.output).toContain("hi");
