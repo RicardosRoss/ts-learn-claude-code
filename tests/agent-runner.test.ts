@@ -100,7 +100,7 @@ describe("AgentRunner", () => {
       }
     ];
 
-    const createTurn = vi.fn(async () => responses.shift());
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
     const registry = new ToolRegistry();
     registry.register({ name: "add", description: "add", handler: async (input) => `added ${input.x}` });
 
@@ -130,7 +130,7 @@ describe("AgentRunner", () => {
       }
     ];
 
-    const createTurn = vi.fn(async () => responses.shift());
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
     const registry = new ToolRegistry();
     registry.register({ name: "echo", description: "echo", handler: async (input) => String(input.v) });
 
@@ -168,7 +168,7 @@ describe("AgentRunner", () => {
       }
     ];
 
-    const createTurn = vi.fn(async () => responses.shift());
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
 
     const runner = new AgentRunner({
       modelClient: { createTurn },
@@ -184,7 +184,7 @@ describe("AgentRunner", () => {
         Array.isArray(msg.content) &&
         msg.content.some((p) => p.type === "tool_result")
     )!;
-    const toolResultPart = (toolResultMsg.content as Array<Record<string, unknown>>).find(
+    const toolResultPart = (toolResultMsg.content as unknown as Array<Record<string, unknown>>).find(
       (p) => p.type === "tool_result"
     )!;
     expect(toolResultPart.content).toContain("Unknown tool");
@@ -202,7 +202,7 @@ describe("AgentRunner", () => {
       }
     ];
 
-    const createTurn = vi.fn(async () => responses.shift());
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
     const registry = new ToolRegistry();
     registry.register({
       name: "failing_tool",
@@ -224,7 +224,7 @@ describe("AgentRunner", () => {
         Array.isArray(msg.content) &&
         msg.content.some((p) => p.type === "tool_result")
     )!;
-    const toolResultPart = (toolResultMsg.content as Array<Record<string, unknown>>).find(
+    const toolResultPart = (toolResultMsg.content as unknown as Array<Record<string, unknown>>).find(
       (p) => p.type === "tool_result"
     )!;
     expect(toolResultPart.content).toContain("boom");
@@ -267,7 +267,7 @@ describe("AgentRunner", () => {
       }
     ];
 
-    const createTurn = vi.fn(async () => responses.shift());
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
     const registry = new ToolRegistry();
     registry.register({ name: "echo", description: "echo", handler: async (input) => String(input.v) });
 
@@ -301,7 +301,7 @@ describe("AgentRunner", () => {
       }
     ];
 
-    const createTurn = vi.fn(async () => responses.shift());
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
     const registry = new ToolRegistry();
     registry.register({ name: "echo", description: "echo", handler: async () => "ok" });
 
@@ -374,7 +374,7 @@ describe("AgentRunner", () => {
       }
     ];
 
-    const createTurn = vi.fn(async () => responses.shift());
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
     const registry = new ToolRegistry();
     registry.register({
       name: "echo_tool",
