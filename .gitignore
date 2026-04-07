@@ -1,0 +1,7 @@
+node_modules/
+docs/
+reference/
+.vscode/
+.env
+AGENTS.md
+CLAUDE.md
