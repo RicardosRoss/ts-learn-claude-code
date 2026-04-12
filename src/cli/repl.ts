@@ -16,17 +16,17 @@ async function main(): Promise<void> {
   const runner = new AgentRunner({
     modelClient: new AnthropicModelClient(),
     toolRegistry: registry,
-    systemPrompt: `You are a coding agent at ${process.cwd()}. Use bash to solve tasks. Act, don't explain.`,
+    systemPrompt: `You are a coding agent at ${process.cwd()}. Use tools to solve tasks. Act, don't explain.`,
     onToolExecution: printToolExecution
   });
 
   const history: AgentMessage[] = [];
-  output.write("s01> real model ready. Type `exit` to quit.\n");
+  output.write("s02> real model ready. Type `exit` to quit.\n");
 
   while (true) {
     let rawLine: string;
     try {
-      rawLine = await rl.question("s01 >> ");
+      rawLine = await rl.question("s02 >> ");
     } catch (error) {
       if (isReadlineClosedError(error)) {
         break;

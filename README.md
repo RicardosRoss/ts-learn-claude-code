@@ -4,11 +4,16 @@
 
 基于 [learn-claude-code](https://learn.shareai.run/zh/) 的 `s01-s12` 课程，用 TypeScript 逐步复现一个完整的 AI Agent 架构。每个阶段严格对齐原课程能力，不超前开发。
 
-## 当前阶段：s01 — Agent Loop + Bash 工具
+## 当前阶段：s02 — Tool Use + 文件工具
 
-实现最小 Agent 闭环：用户输入 → 模型推理 → 工具执行 → 结果反馈 → 循环或结束。
+阶段开发文档：
 
-## 模块结构（s01）
+- [docs/feat/s02-tool-use-development.md](./docs/feat/s02-tool-use-development.md)
+- [docs/feat/s02-tool-use-api-reference.md](./docs/feat/s02-tool-use-api-reference.md)
+
+在保留 `s01` 主循环不变的前提下，引入多工具分发、文件工具和路径安全。
+
+## 当前基础结构（继承自 s01）
 
 ```
 src/
@@ -57,7 +62,7 @@ npm run repl
 | 分支              | 对应课程                    | 核心能力                                  | 状态       |
 | ----------------- | --------------------------- | ----------------------------------------- | ---------- |
 | `lab/s01-*`       | `s01_agent_loop.py`         | while 循环 + bash 工具 + tool_result 反馈 | 进行中     |
-| `lab/s02-*`       | `s02_tool_use.py`           | 多工具分发 + 文件工具 + 路径安全          | 未开始     |
+| `lab/s02-*`       | `s02_tool_use.py`           | 多工具分发 + 文件工具 + 路径安全          | 进行中     |
 | `lab/s03-*`       | `s03_todo_write.py`         | 任务状态外显 + 提醒机制                   | 未开始     |
 | `lab/s04-*`       | `s04_subagent.py`           | 子任务上下文隔离                          | 未开始     |
 | `lab/s05-*`       | `s05_skill_loading.py`      | 按需技能加载                              | 未开始     |

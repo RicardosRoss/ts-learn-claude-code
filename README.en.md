@@ -4,11 +4,16 @@ English | [中文](./README.md)
 
 A stage-by-stage TypeScript reimplementation of the [learn-claude-code](https://learn.shareai.run/zh/) `s01-s12` curriculum. Each stage strictly aligns with the original lesson's capabilities — no jumping ahead.
 
-## Current Stage: s01 — Agent Loop + Bash Tool
+## Current Stage: s02 — Tool Use + File Tools
 
-A minimal agent loop: user input → model inference → tool execution → result feedback → loop or stop.
+Stage development doc:
 
-## Module Structure (s01)
+- [docs/feat/s02-tool-use-development.md](./docs/feat/s02-tool-use-development.md)
+- [docs/feat/s02-tool-use-api-reference.md](./docs/feat/s02-tool-use-api-reference.md)
+
+Keep the `s01` agent loop unchanged, then add multi-tool dispatch, file tools, and path safety.
+
+## Current Base Structure (Inherited from s01)
 
 ```
 src/
@@ -57,7 +62,7 @@ Each stage maps to a dedicated branch `lab/s0N-*`, strictly aligning with the [l
 | Branch            | Curriculum                  | Core Capability                                | Status     |
 | ----------------- | --------------------------- | ---------------------------------------------- | ---------- |
 | `lab/s01-*`       | `s01_agent_loop.py`         | While loop + bash tool + tool_result feedback  | In Progress |
-| `lab/s02-*`       | `s02_tool_use.py`           | Multi-tool dispatch + file tools + path safety | Not Started |
+| `lab/s02-*`       | `s02_tool_use.py`           | Multi-tool dispatch + file tools + path safety | In Progress |
 | `lab/s03-*`       | `s03_todo_write.py`         | Explicit task state + reminder mechanism       | Not Started |
 | `lab/s04-*`       | `s04_subagent.py`           | Subtask context isolation                      | Not Started |
 | `lab/s05-*`       | `s05_skill_loading.py`      | On-demand skill loading                        | Not Started |

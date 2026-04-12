@@ -1,5 +1,12 @@
 node_modules/
-docs/
+docs/*
+!docs/feat/
+docs/feat/*
+!docs/feat/s0*-development.md
+!docs/feat/s0*-api-reference.md
+!docs/templates/
+docs/templates/*
+!docs/templates/stage-*-template.md
 reference/
 .vscode/
 .env
