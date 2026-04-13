@@ -4,14 +4,14 @@
 
 基于 [learn-claude-code](https://learn.shareai.run/zh/) 的 `s01-s12` 课程，用 TypeScript 逐步复现一个完整的 AI Agent 架构。每个阶段严格对齐原课程能力，不超前开发。
 
-## 当前阶段：s02 — Tool Use + 文件工具
+## 当前阶段：s03 — Todo Write + 会话内规划
 
 阶段开发文档：
 
-- [docs/feat/s02-tool-use-development.md](./docs/feat/s02-tool-use-development.md)
-- [docs/feat/s02-tool-use-api-reference.md](./docs/feat/s02-tool-use-api-reference.md)
+- [docs/feat/s03-todo-write-development.md](./docs/feat/s03-todo-write-development.md)
+- [docs/feat/s03-todo-write-api-reference.md](./docs/feat/s03-todo-write-api-reference.md)
 
-在保留 `s01` 主循环不变的前提下，引入多工具分发、文件工具和路径安全。
+在保留 `s02` 工具层不变的前提下，引入会话内 todo 计划、单一 active step 和 reminder 机制。
 
 ## 当前基础结构（继承自 s01）
 
@@ -63,7 +63,7 @@ npm run repl
 | ----------------- | --------------------------- | ----------------------------------------- | ---------- |
 | `lab/s01-*`       | `s01_agent_loop.py`         | while 循环 + bash 工具 + tool_result 反馈 | 进行中     |
 | `lab/s02-*`       | `s02_tool_use.py`           | 多工具分发 + 文件工具 + 路径安全          | 进行中     |
-| `lab/s03-*`       | `s03_todo_write.py`         | 任务状态外显 + 提醒机制                   | 未开始     |
+| `lab/s03-*`       | `s03_todo_write.py`         | 任务状态外显 + 提醒机制                   | 进行中     |
 | `lab/s04-*`       | `s04_subagent.py`           | 子任务上下文隔离                          | 未开始     |
 | `lab/s05-*`       | `s05_skill_loading.py`      | 按需技能加载                              | 未开始     |
 | `lab/s06-*`       | `s06_context_compact.py`    | 上下文压缩                                | 未开始     |

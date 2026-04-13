@@ -4,14 +4,14 @@ English | [中文](./README.md)
 
 A stage-by-stage TypeScript reimplementation of the [learn-claude-code](https://learn.shareai.run/zh/) `s01-s12` curriculum. Each stage strictly aligns with the original lesson's capabilities — no jumping ahead.
 
-## Current Stage: s02 — Tool Use + File Tools
+## Current Stage: s03 — Todo Write + Session Planning
 
 Stage development doc:
 
-- [docs/feat/s02-tool-use-development.md](./docs/feat/s02-tool-use-development.md)
-- [docs/feat/s02-tool-use-api-reference.md](./docs/feat/s02-tool-use-api-reference.md)
+- [docs/feat/s03-todo-write-development.md](./docs/feat/s03-todo-write-development.md)
+- [docs/feat/s03-todo-write-api-reference.md](./docs/feat/s03-todo-write-api-reference.md)
 
-Keep the `s01` agent loop unchanged, then add multi-tool dispatch, file tools, and path safety.
+Keep the `s02` tool layer unchanged, then add a session todo plan, a single active step, and reminder nudges.
 
 ## Current Base Structure (Inherited from s01)
 
@@ -63,7 +63,7 @@ Each stage maps to a dedicated branch `lab/s0N-*`, strictly aligning with the [l
 | ----------------- | --------------------------- | ---------------------------------------------- | ---------- |
 | `lab/s01-*`       | `s01_agent_loop.py`         | While loop + bash tool + tool_result feedback  | In Progress |
 | `lab/s02-*`       | `s02_tool_use.py`           | Multi-tool dispatch + file tools + path safety | In Progress |
-| `lab/s03-*`       | `s03_todo_write.py`         | Explicit task state + reminder mechanism       | Not Started |
+| `lab/s03-*`       | `s03_todo_write.py`         | Explicit task state + reminder mechanism       | In Progress |
 | `lab/s04-*`       | `s04_subagent.py`           | Subtask context isolation                      | Not Started |
 | `lab/s05-*`       | `s05_skill_loading.py`      | On-demand skill loading                        | Not Started |
 | `lab/s06-*`       | `s06_context_compact.py`    | Context compaction                             | Not Started |
