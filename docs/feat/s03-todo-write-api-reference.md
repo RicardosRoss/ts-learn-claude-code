@@ -125,7 +125,7 @@ update(items: TodoItemInput[]): string
 
 ```text
 [x] Read failing test
-[>] Inspect runner flow (Inspecting runner flow)
+[>] Inspect runner flow <- Inspecting runner flow
 [ ] Patch reminder logic
 
 (1/3 completed)
@@ -146,11 +146,37 @@ Error: Keep the session plan short (max 12 items)
 - 把当前计划转成稳定字符串
 - 供 `tool_result`、终端输出、测试断言共用
 
-空状态建议返回：
+**输出格式（严格）：**
+
+每个计划项一行，用状态前缀标记：
+
+| status | 前缀 | activeForm | 示例输出 |
+|---|---|---|---|
+| `completed` | `[x]` | 不显示 | `[x] Read failing test` |
+| `in_progress` | `[>]` | 追加 ` <- {activeForm}`（仅当 activeForm 非空） | `[>] Inspect runner flow <- Inspecting runner flow` |
+| `pending` | `[ ]` | 不显示 | `[ ] Patch reminder logic` |
+
+末尾追加汇总行：`(N/M completed)`（N = completed 数量，M = 总数），前面有一个空行。
+
+**完整示例（3 项计划，1 项完成）：**
+
+```text
+[x] Read failing test
+[>] Inspect runner flow <- Inspecting runner flow
+[ ] Patch reminder logic
+
+(1/3 completed)
+```
+
+**空状态返回：**
 
 ```text
 No session plan yet.
 ```
+
+**关键规则：**
+- 只有 `in_progress` 状态才会追加 `<- activeForm` 后缀，`completed` 和 `pending` 不追加
+- `activeForm` 为空字符串时不追加后缀（即使状态是 `in_progress`）
 
 ### `noteRoundWithoutUpdate(): void`
 

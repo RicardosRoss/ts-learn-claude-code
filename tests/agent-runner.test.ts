@@ -2,6 +2,7 @@ import { describe, expect, test, vi } from "vitest";
 
 import { AgentRunner } from "../src/core/agent-runner.js";
 import { ToolRegistry } from "../src/core/tool-registry.js";
+import { TodoManager } from "../src/core/todo-manager.js";
 import {
   type AgentMessage,
   type ModelTurnRequest,
@@ -46,6 +47,7 @@ describe("AgentRunner", () => {
     const runner = new AgentRunner({
       modelClient: { createTurn },
       toolRegistry: registry,
+      todoManager: new TodoManager(),
       systemPrompt: "test system"
     });
 
@@ -75,6 +77,7 @@ describe("AgentRunner", () => {
     const runner = new AgentRunner({
       modelClient: { createTurn },
       toolRegistry: new ToolRegistry(),
+      todoManager: new TodoManager(),
       systemPrompt: ""
     });
 
@@ -107,6 +110,7 @@ describe("AgentRunner", () => {
     const runner = new AgentRunner({
       modelClient: { createTurn },
       toolRegistry: registry,
+      todoManager: new TodoManager(),
       systemPrompt: ""
     });
 
@@ -137,12 +141,12 @@ describe("AgentRunner", () => {
     const runner = new AgentRunner({
       modelClient: { createTurn },
       toolRegistry: registry,
+      todoManager: new TodoManager(),
       systemPrompt: ""
     });
 
     const result = await runner.run([{ role: "user", content: "parallel" }]);
 
-    // Should have exactly 1 user message with 2 tool_result parts.
     const toolResultMsg = result.messages.find(
       (msg) =>
         msg.role === "user" &&
@@ -173,6 +177,7 @@ describe("AgentRunner", () => {
     const runner = new AgentRunner({
       modelClient: { createTurn },
       toolRegistry: new ToolRegistry(),
+      todoManager: new TodoManager(),
       systemPrompt: ""
     });
 
@@ -213,6 +218,7 @@ describe("AgentRunner", () => {
     const runner = new AgentRunner({
       modelClient: { createTurn },
       toolRegistry: registry,
+      todoManager: new TodoManager(),
       systemPrompt: ""
     });
 
@@ -243,6 +249,7 @@ describe("AgentRunner", () => {
     const runner = new AgentRunner({
       modelClient: { createTurn },
       toolRegistry: registry,
+      todoManager: new TodoManager(),
       systemPrompt: "",
       maxTurns: 3
     });
@@ -274,12 +281,12 @@ describe("AgentRunner", () => {
     const runner = new AgentRunner({
       modelClient: { createTurn },
       toolRegistry: registry,
+      todoManager: new TodoManager(),
       systemPrompt: ""
     });
 
     const result = await runner.run([{ role: "user", content: "mixed" }]);
 
-    // assistant message should contain both text and tool_use blocks.
     const assistantMsg = result.messages.find(
       (msg) => msg.role === "assistant"
     )!;
@@ -295,7 +302,6 @@ describe("AgentRunner", () => {
         content: [{ type: "tool_use", id: "nt1", name: "echo", input: {} }]
       },
       {
-        // end_turn but with empty text — simulates model returning no textual answer.
         stopReason: "end_turn",
         content: [{ type: "tool_use", id: "ghost", name: "echo", input: {} }]
       }
@@ -308,11 +314,11 @@ describe("AgentRunner", () => {
     const runner = new AgentRunner({
       modelClient: { createTurn },
       toolRegistry: registry,
+      todoManager: new TodoManager(),
       systemPrompt: ""
     });
 
     const result = await runner.run([{ role: "user", content: "test" }]);
-    // extractText finds no text blocks → empty string.
     expect(result.finalText).toBe("");
   });
 
@@ -325,13 +331,13 @@ describe("AgentRunner", () => {
     const runner = new AgentRunner({
       modelClient: { createTurn },
       toolRegistry: new ToolRegistry(),
+      todoManager: new TodoManager(),
       systemPrompt: ""
     });
 
     const initial: AgentMessage[] = [{ role: "user", content: "hi" }];
     await runner.run(initial);
 
-    // Original array should not have assistant messages appended.
     expect(initial).toHaveLength(1);
   });
 
@@ -347,6 +353,7 @@ describe("AgentRunner", () => {
     const runner = new AgentRunner({
       modelClient: { createTurn },
       toolRegistry: registry,
+      todoManager: new TodoManager(),
       systemPrompt: "custom prompt"
     });
 
@@ -386,6 +393,7 @@ describe("AgentRunner", () => {
     const runner = new AgentRunner({
       modelClient: { createTurn },
       toolRegistry: registry,
+      todoManager: new TodoManager(),
       systemPrompt: "",
       onToolExecution
     });
@@ -406,5 +414,230 @@ describe("AgentRunner", () => {
       output: "echo:hi",
       isError: false
     });
+  });
+});
+
+// ---------------------------------------------------------------------------
+// s03: reminder injection via TodoManager
+// ---------------------------------------------------------------------------
+
+describe("AgentRunner s03 reminder", () => {
+  test("does not inject reminder when no plan exists", async () => {
+    const todoManager = new TodoManager();
+    const responses: ModelTurnResponse[] = [
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "echo", input: { v: "a" } }] },
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "t2", name: "echo", input: { v: "b" } }] },
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "t3", name: "echo", input: { v: "c" } }] },
+      { stopReason: "end_turn", content: [{ type: "text", text: "done" }] }
+    ];
+
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
+    const registry = new ToolRegistry();
+    registry.register({ name: "echo", description: "echo", handler: async (input) => String(input.v) });
+
+    const runner = new AgentRunner({
+      modelClient: { createTurn },
+      toolRegistry: registry,
+      systemPrompt: "",
+      todoManager
+    });
+
+    const result = await runner.run([{ role: "user", content: "go" }]);
+
+    for (const msg of result.messages) {
+      if (msg.role === "user" && Array.isArray(msg.content)) {
+        for (const part of msg.content as Array<{ type: string; text?: string }>) {
+          if (part.type === "text") {
+            expect(part.text).not.toContain("<reminder>");
+          }
+        }
+      }
+    }
+  });
+
+  test("does not inject reminder within first 2 rounds without todo update", async () => {
+    const todoManager = new TodoManager();
+    todoManager.update([{ content: "Plan exists", status: "pending" }]);
+
+    const responses: ModelTurnResponse[] = [
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "r1", name: "echo", input: { v: "a" } }] },
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "r2", name: "echo", input: { v: "b" } }] },
+      { stopReason: "end_turn", content: [{ type: "text", text: "done" }] }
+    ];
+
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
+    const registry = new ToolRegistry();
+    registry.register({ name: "echo", description: "echo", handler: async (input) => String(input.v) });
+
+    const runner = new AgentRunner({
+      modelClient: { createTurn },
+      toolRegistry: registry,
+      systemPrompt: "",
+      todoManager
+    });
+
+    const result = await runner.run([{ role: "user", content: "go" }]);
+
+    for (const msg of result.messages) {
+      if (msg.role === "user" && Array.isArray(msg.content)) {
+        for (const part of msg.content as Array<{ type: string; text?: string }>) {
+          if (part.type === "text") {
+            expect(part.text).not.toContain("<reminder>");
+          }
+        }
+      }
+    }
+  });
+
+  test("injects reminder after 3 rounds without todo update", async () => {
+    const todoManager = new TodoManager();
+    todoManager.update([{ content: "Plan exists", status: "pending" }]);
+
+    const responses: ModelTurnResponse[] = [
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "n1", name: "echo", input: { v: "1" } }] },
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "n2", name: "echo", input: { v: "2" } }] },
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "n3", name: "echo", input: { v: "3" } }] },
+      { stopReason: "end_turn", content: [{ type: "text", text: "done" }] }
+    ];
+
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
+    const registry = new ToolRegistry();
+    registry.register({ name: "echo", description: "echo", handler: async (input) => String(input.v) });
+
+    const runner = new AgentRunner({
+      modelClient: { createTurn },
+      toolRegistry: registry,
+      systemPrompt: "",
+      todoManager
+    });
+
+    const result = await runner.run([{ role: "user", content: "go" }]);
+
+    const userMessages = result.messages.filter(
+      (msg) => msg.role === "user" && Array.isArray(msg.content)
+    );
+    const lastUserMsg = userMessages[userMessages.length - 1];
+    const textParts = (lastUserMsg.content as Array<{ type: string; text?: string }>).filter(
+      (p) => p.type === "text"
+    );
+    expect(textParts.some((p) => p.text?.includes("<reminder>"))).toBe(true);
+  });
+
+  test("resets reminder counter when todo tool is called", async () => {
+    const todoManager = new TodoManager();
+
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "echo",
+      description: "echo",
+      handler: async (input) => String(input.v)
+    });
+    registry.register({
+      name: "todo",
+      description: "update plan",
+      inputSchema: {
+        type: "object",
+        properties: {
+          items: {
+            type: "array",
+            items: {
+              type: "object",
+              properties: {
+                content: { type: "string" },
+                status: { type: "string", enum: ["pending", "in_progress", "completed"] }
+              },
+              required: ["content", "status"]
+            }
+          }
+        },
+        required: ["items"]
+      },
+      handler: async (input) => {
+        const items = input.items as Array<{ content: string; status: "pending" | "in_progress" | "completed"; activeForm?: string }>;
+        return todoManager.update(items);
+      }
+    });
+
+    // echo, echo (2 rounds), todo (resets), echo, echo, echo (3 rounds -> reminder)
+    const responses: ModelTurnResponse[] = [
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "a1", name: "echo", input: { v: "1" } }] },
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "a2", name: "echo", input: { v: "2" } }] },
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "a3", name: "todo", input: { items: [{ content: "Plan", status: "pending" }] } }] },
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "a4", name: "echo", input: { v: "4" } }] },
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "a5", name: "echo", input: { v: "5" } }] },
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "a6", name: "echo", input: { v: "6" } }] },
+      { stopReason: "end_turn", content: [{ type: "text", text: "done" }] }
+    ];
+
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
+
+    const runner = new AgentRunner({
+      modelClient: { createTurn },
+      toolRegistry: registry,
+      systemPrompt: "",
+      todoManager
+    });
+
+    const result = await runner.run([{ role: "user", content: "go" }]);
+
+    // Last user message should have reminder (3 rounds after todo reset)
+    const userMessages = result.messages.filter(
+      (msg) => msg.role === "user" && Array.isArray(msg.content)
+    );
+    const lastUserMsg = userMessages[userMessages.length - 1];
+    const textParts = (lastUserMsg.content as Array<{ type: string; text?: string }>).filter(
+      (p) => p.type === "text"
+    );
+    expect(textParts.some((p) => p.text?.includes("<reminder>"))).toBe(true);
+
+    // The user message right after the todo call should NOT have a reminder
+    const afterTodoMsg = userMessages[userMessages.length - 2];
+    const afterTodoTextParts = (afterTodoMsg.content as Array<{ type: string; text?: string }>).filter(
+      (p) => p.type === "text"
+    );
+    expect(afterTodoTextParts.every((p) => !p.text?.includes("<reminder>"))).toBe(true);
+  });
+
+  test("reminder is a TextPart prepended before tool_results", async () => {
+    const todoManager = new TodoManager();
+    todoManager.update([{ content: "Plan", status: "pending" }]);
+
+    const responses: ModelTurnResponse[] = [
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "r1", name: "echo", input: { v: "1" } }] },
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "r2", name: "echo", input: { v: "2" } }] },
+      { stopReason: "tool_use", content: [{ type: "tool_use", id: "r3", name: "echo", input: { v: "3" } }] },
+      { stopReason: "end_turn", content: [{ type: "text", text: "done" }] }
+    ];
+
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
+    const registry = new ToolRegistry();
+    registry.register({ name: "echo", description: "echo", handler: async (input) => String(input.v) });
+
+    const runner = new AgentRunner({
+      modelClient: { createTurn },
+      toolRegistry: registry,
+      systemPrompt: "",
+      todoManager
+    });
+
+    const result = await runner.run([{ role: "user", content: "go" }]);
+
+    const userMessages = result.messages.filter(
+      (msg) => msg.role === "user" && Array.isArray(msg.content)
+    );
+    const reminderMsg = userMessages.find((msg) =>
+      (msg.content as Array<{ type: string; text?: string }>).some(
+        (p) => p.type === "text" && p.text?.includes("<reminder>")
+      )
+    );
+    expect(reminderMsg).toBeDefined();
+
+    const parts = reminderMsg!.content as Array<{ type: string; text?: string }>;
+    const reminderIdx = parts.findIndex(
+      (p) => p.type === "text" && p.text?.includes("<reminder>")
+    );
+    const firstToolResultIdx = parts.findIndex((p) => p.type === "tool_result");
+    // Reminder text part should come before tool_result parts
+    expect(reminderIdx).toBeLessThan(firstToolResultIdx);
   });
 });

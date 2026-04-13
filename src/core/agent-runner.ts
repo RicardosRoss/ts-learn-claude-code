@@ -4,15 +4,18 @@ import type {
   ModelClient,
   ModelContentBlock,
   ModelToolUseBlock,
+  TextPart,
   ToolResultPart
 } from "./types.js";
 import type { ToolExecutionContext } from "./tool-registry.js";
+import type { TodoManager } from "./todo-manager.js";
 import { ToolRegistry } from "./tool-registry.js";
 
 /** Options for constructing an AgentRunner instance. */
 export interface AgentRunnerOptions {
   modelClient: ModelClient;
   toolRegistry: ToolRegistry;
+  todoManager: TodoManager;
   systemPrompt: string;
   workspaceRoot?: string;
   maxTurns?: number;
@@ -37,6 +40,7 @@ export interface ToolExecutionEvent {
 export class AgentRunner {
   private readonly modelClient: ModelClient;
   private readonly toolRegistry: ToolRegistry;
+  private readonly todoManager: TodoManager;
   private readonly systemPrompt: string;
   private readonly execContext: ToolExecutionContext;
   private readonly maxTurns: number;
@@ -45,6 +49,7 @@ export class AgentRunner {
   constructor(options: AgentRunnerOptions) {
     this.modelClient = options.modelClient;
     this.toolRegistry = options.toolRegistry;
+    this.todoManager = options.todoManager;
     this.systemPrompt = options.systemPrompt;
     this.execContext = { workspaceRoot: options.workspaceRoot ?? process.cwd() };
     this.maxTurns = options.maxTurns ?? 30;
@@ -71,13 +76,29 @@ export class AgentRunner {
       if (response.stopReason !== "tool_use") {
         return { messages, finalText: extractText(response.content) };
       }
-      const toolExecuteResultContent: ToolResultPart[] = [];
+
+      const toolExecuteResultContent: Array<ToolResultPart | TextPart> = [];
+      let usedTodo = false;
+
       for (const modelToolUseBlock of response.content) {
         if (modelToolUseBlock.type === "tool_use") {
+          if (modelToolUseBlock.name === "todo") {
+            usedTodo = true;
+          }
           const tooluseResult = await this.executeTool(modelToolUseBlock);
           toolExecuteResultContent.push(tooluseResult);
         }
       }
+
+      if (!usedTodo) {
+        this.todoManager.noteRoundWithoutUpdate();
+      }
+
+      const reminderText = this.todoManager.reminder();
+      if (reminderText !== null) {
+        toolExecuteResultContent.unshift({ type: "text", text: reminderText });
+      }
+
       messages.push({ role: "user", content: toolExecuteResultContent });
     }
 

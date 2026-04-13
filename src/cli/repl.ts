@@ -4,6 +4,7 @@ import { stdin as input, stdout as output } from "node:process";
 import { AgentRunner, type ToolExecutionEvent } from "../core/agent-runner.js";
 import { AnthropicModelClient } from "../core/anthropic-model-client.js";
 import { ToolRegistry } from "../core/tool-registry.js";
+import { TodoManager } from "../core/todo-manager.js";
 import type { AgentMessage } from "../core/types.js";
 import { registerBuiltinTools } from "../tools/builtin-tools.js";
 
@@ -11,22 +12,24 @@ import { registerBuiltinTools } from "../tools/builtin-tools.js";
 async function main(): Promise<void> {
   const rl = readline.createInterface({ input, output });
   const registry = new ToolRegistry();
-  registerBuiltinTools(registry);
+  const todoManager = new TodoManager();
+  registerBuiltinTools(registry, todoManager);
 
   const runner = new AgentRunner({
     modelClient: new AnthropicModelClient(),
     toolRegistry: registry,
+    todoManager,
     systemPrompt: `You are a coding agent at ${process.cwd()}. Use tools to solve tasks. Act, don't explain.`,
     onToolExecution: printToolExecution
   });
 
   const history: AgentMessage[] = [];
-  output.write("s02> real model ready. Type `exit` to quit.\n");
+  output.write("s03> real model ready. Type `exit` to quit.\n");
 
   while (true) {
     let rawLine: string;
     try {
-      rawLine = await rl.question("s02 >> ");
+      rawLine = await rl.question("s03 >> ");
     } catch (error) {
       if (isReadlineClosedError(error)) {
         break;
@@ -56,21 +59,24 @@ async function main(): Promise<void> {
 
 /** Prints bash tool activity to the terminal: yellow command line before execution, output after. */
 function printToolExecution(event: ToolExecutionEvent): void {
-  if (event.toolName !== "bash") {
-    return;
-  }
+  if (event.toolName === "bash") {
+    if (event.phase === "before") {
+      const command = readBashCommand(event.input);
+      if (command.length > 0) {
+        output.write(`\u001B[33m$ ${command}\u001B[0m\n`);
+      }
+      return;
+    }
 
-  if (event.phase === "before") {
-    const command = readBashCommand(event.input);
-    if (command.length > 0) {
-      output.write(`\u001B[33m$ ${command}\u001B[0m\n`);
+    const preview = event.output.slice(0, 200).trimEnd();
+    if (preview.length > 0) {
+      output.write(`${preview}\n`);
     }
     return;
   }
 
-  const preview = event.output.slice(0, 200).trimEnd();
-  if (preview.length > 0) {
-    output.write(`${preview}\n`);
+  if (event.toolName === "todo" && event.phase === "after") {
+    output.write(`${event.output}\n`);
   }
 }
 
