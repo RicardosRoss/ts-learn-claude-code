@@ -37,7 +37,7 @@ skipIfNoApiKey("repl smoke", () => {
     const result = await runReplWithInput("!bash echo hi\nexit\n");
     expect(result.output).toContain("hi");
     expect(result.code).toBe(0);
-  });
+  }, 15000);
 
   // --- edge cases ---
 
