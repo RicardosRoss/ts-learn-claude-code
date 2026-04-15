@@ -5,6 +5,7 @@ import { AgentRunner, type ToolExecutionEvent } from "../core/agent-runner.js";
 import { AnthropicModelClient } from "../core/anthropic-model-client.js";
 import { ToolRegistry } from "../core/tool-registry.js";
 import { TodoManager } from "../core/todo-manager.js";
+import { SubagentFactory } from "../core/subagent-factory.js";
 import type { AgentMessage } from "../core/types.js";
 import { registerBuiltinTools } from "../tools/builtin-tools.js";
 
@@ -13,23 +14,33 @@ async function main(): Promise<void> {
   const rl = readline.createInterface({ input, output });
   const registry = new ToolRegistry();
   const todoManager = new TodoManager();
-  registerBuiltinTools(registry, todoManager);
+
+  const modelClient = new AnthropicModelClient();
+
+  const subagentFactory = new SubagentFactory({
+    modelClient,
+    parentToolRegistry: registry,
+    todoManager,
+    workspaceRoot: process.cwd()
+  });
+
+  registerBuiltinTools({ registry, todoManager, subagentFactory });
 
   const runner = new AgentRunner({
-    modelClient: new AnthropicModelClient(),
+    modelClient,
     toolRegistry: registry,
     todoManager,
-    systemPrompt: `You are a coding agent at ${process.cwd()}. Use tools to solve tasks. Act, don't explain.`,
+    systemPrompt: `You are a coding agent at ${process.cwd()}. Use the task tool to delegate exploration or subtasks.`,
     onToolExecution: printToolExecution
   });
 
   const history: AgentMessage[] = [];
-  output.write("s03> real model ready. Type `exit` to quit.\n");
+  output.write("s04> real model ready. Type `exit` to quit.\n");
 
   while (true) {
     let rawLine: string;
     try {
-      rawLine = await rl.question("s03 >> ");
+      rawLine = await rl.question("s04 >> ");
     } catch (error) {
       if (isReadlineClosedError(error)) {
         break;
@@ -78,12 +89,30 @@ function printToolExecution(event: ToolExecutionEvent): void {
   if (event.toolName === "todo" && event.phase === "after") {
     output.write(`${event.output}\n`);
   }
+
+  if (event.toolName === "task") {
+    if (event.phase === "before") {
+      const desc = readTaskDescription(event.input);
+      output.write(`\u001B[36m> task (${desc})\u001B[0m\n`);
+      return;
+    }
+    const preview = event.output.slice(0, 200).trimEnd();
+    if (preview.length > 0) {
+      output.write(`  ${preview}\n`);
+    }
+  }
 }
 
 /** Extracts the "command" field from bash tool input, returns empty string if missing. */
 function readBashCommand(input: Record<string, unknown>): string {
   const command = input.command;
   return typeof command === "string" ? command : "";
+}
+
+/** Extracts the "description" field from task tool input, returns fallback if missing. */
+function readTaskDescription(input: Record<string, unknown>): string {
+  const desc = input.description;
+  return typeof desc === "string" && desc.length > 0 ? desc : "subtask";
 }
 
 /** Returns true if the error is caused by the readline interface being closed (EOF / pipe close). */

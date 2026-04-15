@@ -1,13 +1,24 @@
 import { ToolRegistry } from "../core/tool-registry.js";
 import type { TodoManager, TodoItemInput } from "../core/todo-manager.js";
+import type { SubagentFactory } from "../core/subagent-factory.js";
 import { runBash } from "./bash-tool.js";
 import { runRead, runWrite, runEdit } from "./file-tools.js";
 
+/** Options for registering all built-in tools. */
+export interface RegisterBuiltinToolsOptions {
+  registry: ToolRegistry;
+  todoManager: TodoManager;
+  /** Optional: enables task tool registration for s04 subagent support. */
+  subagentFactory?: SubagentFactory;
+}
+
 /**
  * Registers all built-in tools for the current stage onto the given registry.
- * s03: bash + file tools (read/write/edit) + todo.
+ * s04: bash + file tools (read/write/edit) + todo + task (subagent).
  */
-export function registerBuiltinTools(registry: ToolRegistry, todoManager: TodoManager): void {
+export function registerBuiltinTools(options: RegisterBuiltinToolsOptions): void {
+  const { registry, todoManager, subagentFactory } = options;
+
   registry.register({
     name: "bash",
     description: "Run a shell command.",
@@ -98,6 +109,27 @@ export function registerBuiltinTools(registry: ToolRegistry, todoManager: TodoMa
       return todoManager.update(items);
     }
   });
+
+  // s04: task tool — spawn subagent with fresh context
+  if (subagentFactory) {
+    registry.register({
+      name: "task",
+      description: "Spawn a subagent with fresh context. It shares the filesystem but not conversation history.",
+      inputSchema: {
+        type: "object",
+        properties: {
+          prompt: { type: "string", description: "The task to delegate" },
+          description: { type: "string", description: "Short description of the task" }
+        },
+        required: ["prompt"]
+      },
+      handler: async (input) => {
+        const prompt = readString(input, "prompt");
+        const description = readOptionalString(input, "description");
+        return subagentFactory.runSubagent(prompt, description ?? "subtask");
+      }
+    });
+  }
 }
 
 /**
@@ -121,6 +153,17 @@ function readOptionalNumber(input: Record<string, unknown>, key: string): number
   const value = input[key];
   if (typeof value === "number") return value;
   throw new Error(`Invalid input: ${key} must be a number`);
+}
+
+/**
+ * Extracts an optional string from the input object.
+ * Returns undefined if the key is missing; throws if present but not a string.
+ */
+function readOptionalString(input: Record<string, unknown>, key: string): string | undefined {
+  if (!(key in input)) return undefined;
+  const value = input[key];
+  if (typeof value === "string") return value;
+  throw new Error(`Invalid input: ${key} must be a string`);
 }
 
 const VALID_STATUSES = new Set(["pending", "in_progress", "completed"]);

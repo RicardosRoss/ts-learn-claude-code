@@ -73,6 +73,6 @@ skipIfNoApiKey("repl smoke", () => {
 
   test("shows prompt indicator", async () => {
     const result = await runReplWithInput("exit\n");
-    expect(result.output).toContain("s01");
+    expect(result.output).toContain("s04");
   });
 });
