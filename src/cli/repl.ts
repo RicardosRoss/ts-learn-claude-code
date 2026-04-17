@@ -1,11 +1,13 @@
 import readline from "node:readline/promises";
+import path from "node:path";
 import { stdin as input, stdout as output } from "node:process";
 
 import { AgentRunner, type ToolExecutionEvent } from "../core/agent-runner.js";
 import { AnthropicModelClient } from "../core/anthropic-model-client.js";
+import { Compactor } from "../core/compactor.js";
 import { ToolRegistry } from "../core/tool-registry.js";
 import { TodoManager } from "../core/todo-manager.js";
-import { SubagentFactory } from "../core/subagent-factory.js";
+import { SkillLoader } from "../core/skill-loader.js";
 import type { AgentMessage } from "../core/types.js";
 import { registerBuiltinTools } from "../tools/builtin-tools.js";
 
@@ -17,30 +19,42 @@ async function main(): Promise<void> {
 
   const modelClient = new AnthropicModelClient();
 
-  const subagentFactory = new SubagentFactory({
+  const skillLoader = new SkillLoader(
+    path.resolve(process.cwd(), "skills")
+  );
+
+  const compactor = new Compactor({
     modelClient,
-    parentToolRegistry: registry,
-    todoManager,
-    workspaceRoot: process.cwd()
+    transcriptDir: path.resolve(process.cwd(), ".transcripts")
   });
 
-  registerBuiltinTools({ registry, todoManager, subagentFactory });
+  registerBuiltinTools({ registry, todoManager, skillLoader });
+
+  const skillDescriptions = skillLoader.getDescriptions();
+  const systemPrompt = [
+    `You are a coding agent at ${process.cwd()}.`,
+    "Use load_skill to access specialized knowledge.",
+    "",
+    "Skills available:",
+    skillDescriptions
+  ].join("\n");
 
   const runner = new AgentRunner({
     modelClient,
     toolRegistry: registry,
     todoManager,
-    systemPrompt: `You are a coding agent at ${process.cwd()}. Use the task tool to delegate exploration or subtasks.`,
+    systemPrompt,
+    compactor,
     onToolExecution: printToolExecution
   });
 
   const history: AgentMessage[] = [];
-  output.write("s04> real model ready. Type `exit` to quit.\n");
+  output.write("s06> real model ready. Type `exit` to quit.\n");
 
   while (true) {
     let rawLine: string;
     try {
-      rawLine = await rl.question("s04 >> ");
+      rawLine = await rl.question("s06 >> ");
     } catch (error) {
       if (isReadlineClosedError(error)) {
         break;
@@ -90,10 +104,10 @@ function printToolExecution(event: ToolExecutionEvent): void {
     output.write(`${event.output}\n`);
   }
 
-  if (event.toolName === "task") {
+  if (event.toolName === "load_skill") {
     if (event.phase === "before") {
-      const desc = readTaskDescription(event.input);
-      output.write(`\u001B[36m> task (${desc})\u001B[0m\n`);
+      const skillName = readSkillName(event.input);
+      output.write(`\u001B[36m> load_skill (${skillName})\u001B[0m\n`);
       return;
     }
     const preview = event.output.slice(0, 200).trimEnd();
@@ -109,10 +123,10 @@ function readBashCommand(input: Record<string, unknown>): string {
   return typeof command === "string" ? command : "";
 }
 
-/** Extracts the "description" field from task tool input, returns fallback if missing. */
-function readTaskDescription(input: Record<string, unknown>): string {
-  const desc = input.description;
-  return typeof desc === "string" && desc.length > 0 ? desc : "subtask";
+/** Extracts the "name" field from load_skill tool input, returns fallback if missing. */
+function readSkillName(input: Record<string, unknown>): string {
+  const name = input.name;
+  return typeof name === "string" && name.length > 0 ? name : "unknown";
 }
 
 /** Returns true if the error is caused by the readline interface being closed (EOF / pipe close). */

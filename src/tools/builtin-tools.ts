@@ -1,6 +1,6 @@
 import { ToolRegistry } from "../core/tool-registry.js";
 import type { TodoManager, TodoItemInput } from "../core/todo-manager.js";
-import type { SubagentFactory } from "../core/subagent-factory.js";
+import type { SkillLoader } from "../core/skill-loader.js";
 import { runBash } from "./bash-tool.js";
 import { runRead, runWrite, runEdit } from "./file-tools.js";
 
@@ -8,16 +8,16 @@ import { runRead, runWrite, runEdit } from "./file-tools.js";
 export interface RegisterBuiltinToolsOptions {
   registry: ToolRegistry;
   todoManager: TodoManager;
-  /** Optional: enables task tool registration for s04 subagent support. */
-  subagentFactory?: SubagentFactory;
+  /** s05: skill loader for load_skill tool. */
+  skillLoader: SkillLoader;
 }
 
 /**
  * Registers all built-in tools for the current stage onto the given registry.
- * s04: bash + file tools (read/write/edit) + todo + task (subagent).
+ * s05: bash + file tools (read/write/edit) + todo + load_skill.
  */
 export function registerBuiltinTools(options: RegisterBuiltinToolsOptions): void {
-  const { registry, todoManager, subagentFactory } = options;
+  const { registry, todoManager, skillLoader } = options;
 
   registry.register({
     name: "bash",
@@ -110,26 +110,35 @@ export function registerBuiltinTools(options: RegisterBuiltinToolsOptions): void
     }
   });
 
-  // s04: task tool — spawn subagent with fresh context
-  if (subagentFactory) {
-    registry.register({
-      name: "task",
-      description: "Spawn a subagent with fresh context. It shares the filesystem but not conversation history.",
-      inputSchema: {
-        type: "object",
-        properties: {
-          prompt: { type: "string", description: "The task to delegate" },
-          description: { type: "string", description: "Short description of the task" }
-        },
-        required: ["prompt"]
+  // s05: load_skill tool — load skill content on demand (Layer 2)
+  registry.register({
+    name: "load_skill",
+    description: "Load specialized knowledge by name.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Skill name to load" }
       },
-      handler: async (input) => {
-        const prompt = readString(input, "prompt");
-        const description = readOptionalString(input, "description");
-        return subagentFactory.runSubagent(prompt, description ?? "subtask");
+      required: ["name"]
+    },
+    handler: async (input) => {
+      const name = readString(input, "name");
+      return skillLoader.getContent(name);
+    }
+  });
+
+  // s06: compact tool — trigger manual conversation compression (Layer 3)
+  registry.register({
+    name: "compact",
+    description: "Trigger manual conversation compression.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        focus: { type: "string", description: "What to preserve in the summary" }
       }
-    });
-  }
+    },
+    handler: async () => "Compressing..."
+  });
 }
 
 /**
@@ -153,17 +162,6 @@ function readOptionalNumber(input: Record<string, unknown>, key: string): number
   const value = input[key];
   if (typeof value === "number") return value;
   throw new Error(`Invalid input: ${key} must be a number`);
-}
-
-/**
- * Extracts an optional string from the input object.
- * Returns undefined if the key is missing; throws if present but not a string.
- */
-function readOptionalString(input: Record<string, unknown>, key: string): string | undefined {
-  if (!(key in input)) return undefined;
-  const value = input[key];
-  if (typeof value === "string") return value;
-  throw new Error(`Invalid input: ${key} must be a string`);
 }
 
 const VALID_STATUSES = new Set(["pending", "in_progress", "completed"]);

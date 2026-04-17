@@ -9,6 +9,7 @@ import type {
 } from "./types.js";
 import type { ToolExecutionContext } from "./tool-registry.js";
 import type { TodoManager } from "./todo-manager.js";
+import type { Compactor } from "./compactor.js";
 import { ToolRegistry } from "./tool-registry.js";
 
 /** Options for constructing an AgentRunner instance. */
@@ -19,6 +20,8 @@ export interface AgentRunnerOptions {
   systemPrompt: string;
   workspaceRoot?: string;
   maxTurns?: number;
+  /** s06: 可选 Compactor，启用三层压缩管线。 */
+  compactor?: Compactor;
   onToolExecution?: (event: ToolExecutionEvent) => void;
 }
 
@@ -44,6 +47,7 @@ export class AgentRunner {
   private readonly systemPrompt: string;
   private readonly execContext: ToolExecutionContext;
   private readonly maxTurns: number;
+  private readonly compactor?: Compactor;
   private readonly onToolExecution?: (event: ToolExecutionEvent) => void;
 
   constructor(options: AgentRunnerOptions) {
@@ -53,6 +57,7 @@ export class AgentRunner {
     this.systemPrompt = options.systemPrompt;
     this.execContext = { workspaceRoot: options.workspaceRoot ?? process.cwd() };
     this.maxTurns = options.maxTurns ?? 30;
+    this.compactor = options.compactor;
     this.onToolExecution = options.onToolExecution;
   }
 
@@ -65,6 +70,16 @@ export class AgentRunner {
     const messages = [...initialMessages];
 
     for (let turn = 0; turn < this.maxTurns; turn += 1) {
+      // s06 Layer 1: micro_compact — 每轮静默替换旧 tool_result
+      this.compactor?.microCompact(messages);
+
+      // s06 Layer 2: auto_compact — token 超阈值时保存 transcript + LLM 摘要
+      if (this.compactor && this.compactor.estimateTokens(messages) > this.compactor.threshold) {
+        const compacted = await this.compactor.autoCompact(messages);
+        messages.length = 0;
+        messages.push(...compacted);
+      }
+
       const response = await this.modelClient.createTurn({
         systemPrompt: this.systemPrompt,
         messages,
@@ -79,11 +94,15 @@ export class AgentRunner {
 
       const toolExecuteResultContent: Array<ToolResultPart | TextPart> = [];
       let usedTodo = false;
+      let usedCompact = false;
 
       for (const modelToolUseBlock of response.content) {
         if (modelToolUseBlock.type === "tool_use") {
           if (modelToolUseBlock.name === "todo") {
             usedTodo = true;
+          }
+          if (modelToolUseBlock.name === "compact") {
+            usedCompact = true;
           }
           const tooluseResult = await this.executeTool(modelToolUseBlock);
           toolExecuteResultContent.push(tooluseResult);
@@ -100,6 +119,12 @@ export class AgentRunner {
       }
 
       messages.push({ role: "user", content: toolExecuteResultContent });
+
+      // s06 Layer 3: manual compact — 模型调用 compact 工具后触发
+      if (usedCompact && this.compactor) {
+        const compacted = await this.compactor.autoCompact(messages);
+        return { messages: compacted, finalText: "(context compacted)" };
+      }
     }
 
     throw new Error(`Exceeded max turns: ${this.maxTurns}`);
