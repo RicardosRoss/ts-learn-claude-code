@@ -43,10 +43,15 @@ export class Compactor {
    * 用于判断是否需要触发 auto_compact。
    */
   estimateTokens(messages: AgentMessage[]): number {
-    // TODO: 实现
-    // JSON.stringify(messages).length / 4，向下取整
-    void messages;
-    return 0;
+    let usercontent = 0,
+      assistantcontent = 0;
+    for (let message of messages) {
+      if (message.role == "user") usercontent += message.content.length;
+      else {
+        assistantcontent += JSON.stringify(message.content).length;
+      }
+    }
+    return (usercontent + assistantcontent) / 4;
   }
 
   /**
@@ -59,15 +64,31 @@ export class Compactor {
    * - 替换格式: "[Previous: used {tool_name}]"
    */
   microCompact(messages: AgentMessage[]): void {
-    // TODO: 实现
-    // 1. 遍历所有消息，收集 (msgIdx, partIdx, part) 中 type === "tool_result" 的条目
-    // 2. 从 assistant 消息中构建 tool_use_id → tool_name 的映射表
-    // 3. 如果 tool_result 数量 <= keepRecent，无需处理
-    // 4. 对超出 keepRecent 的部分：
-    //    - 内容 ≤ 100 字符 → 跳过
-    //    - tool_name 在 preserveTools 中 → 跳过
-    //    - 其余：将 part.content 替换为 "[Previous: used {tool_name}]"
-    void messages;
+    const toolNameMap = buildToolNameMap(messages);
+
+    // 1. 收集所有 tool_result 的位置和引用
+    const toolResults: Array<{ part: ToolResultPart }> = [];
+    for (const msg of messages) {
+      if (msg.role === "user" && Array.isArray(msg.content)) {
+        for (const part of msg.content) {
+          if (part.type === "tool_result") {
+            toolResults.push({ part });
+          }
+        }
+      }
+    }
+
+    // 2. 数量不够，无需处理
+    if (toolResults.length <= this.keepRecent) return;
+
+    // 3. 对超出 keepRecent 的旧条目，就地替换
+    const olderResults = toolResults.slice(0, toolResults.length - this.keepRecent);
+    for (const { part } of olderResults) {
+      if (part.content.length <= 100) continue;
+      const toolName = toolNameMap.get(part.toolUseId);
+      if (toolName && this.preserveTools.has(toolName)) continue;
+      part.content = `[Previous: used ${toolName ?? "unknown"}]`;
+    }
   }
 
   /**
@@ -75,18 +96,45 @@ export class Compactor {
    * 返回压缩后的消息列表（单条 user 消息包含摘要）。
    */
   async autoCompact(messages: AgentMessage[]): Promise<AgentMessage[]> {
-    // TODO: 实现
-    // 1. fs.mkdirSync(transcriptDir, { recursive: true }) — 确保 .transcripts 目录存在
-    // 2. Math.floor(Date.now() / 1000) → Unix 时间戳
-    // 3. path.join(transcriptDir, `transcript_${ts}.jsonl`) → 文件路径
-    // 4. messages.map(m => JSON.stringify(m)).join("\n") + "\n" → JSONL 内容
-    // 5. fs.writeFileSync(transcriptPath, lines) — 保存 transcript
-    // 6. JSON.stringify(messages).slice(-80000) → 截取末尾对话文本
-    // 7. modelClient.createTurn({ systemPrompt, messages: [摘要请求], tools: [] })
-    // 8. 从响应中提取文本作为摘要，无文本则用 "No summary generated."
-    // 9. 返回 [单条 user 消息: "[Conversation compressed. Transcript: {path}]\n\n{摘要}"]
-    void messages;
-    return [];
+    // 1. 确保 .transcripts 目录存在
+    fs.mkdirSync(this.transcriptDir, { recursive: true });
+
+    // 2-3. 用 Unix 时间戳生成 transcript 文件名
+    const ts = Math.floor(Date.now() / 1000);
+    const transcriptPath = path.join(this.transcriptDir, `transcript_${ts}.jsonl`);
+
+    // 4-5. 保存完整对话为 JSONL
+    const lines = messages.map((m) => JSON.stringify(m)).join("\n") + "\n";
+    fs.writeFileSync(transcriptPath, lines);
+
+    // 6. 截取末尾对话文本（避免发给 LLM 的内容过长）
+    const conversationText = JSON.stringify(messages).slice(-80000);
+
+    // 7. 请求 LLM 生成摘要
+    const response = await this.modelClient.createTurn({
+      systemPrompt: "Summarize the conversation, preserving key decisions and context.",
+      messages: [
+        { role: "user", content: `Summarize this conversation:\n\n${conversationText}` }
+      ],
+      tools: []
+    });
+
+    // 8. 从响应中提取文本摘要
+    let summary = "No summary generated.";
+    for (const block of response.content) {
+      if (block.type === "text") {
+        summary = block.text;
+        break;
+      }
+    }
+
+    // 9. 返回单条 user 消息，包含 transcript 路径和摘要
+    return [
+      {
+        role: "user",
+        content: `[Conversation compressed. Transcript: ${transcriptPath}]\n\n${summary}`
+      }
+    ];
   }
 }
 
@@ -95,10 +143,15 @@ export class Compactor {
  * 用于 microCompact 时确定 tool_result 来自哪个工具。
  */
 function buildToolNameMap(messages: AgentMessage[]): Map<string, string> {
-  // TODO: 实现
-  // 遍历消息，找到 role === "assistant" 的消息
-  // 遍历其 content，找到 type === "tool_use" 的 block
-  // 将 block.id → block.name 存入 Map
-  void messages;
-  return new Map();
+  const map = new Map<string, string>();
+  for (const msg of messages) {
+    if (msg.role === "assistant") {
+      for (const block of msg.content) {
+        if (block.type === "tool_use") {
+          map.set(block.id, block.name);
+        }
+      }
+    }
+  }
+  return map;
 }
