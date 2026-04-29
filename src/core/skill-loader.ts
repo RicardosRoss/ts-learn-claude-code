@@ -134,15 +134,11 @@ export class SkillLoader {
   getContent(name: string): string {
     const skill = this.skills.get(name);
     if (!skill) {
-      return `Error: Unknown skill '${name}'. Available: ${this.availableNames()}`;
+      const names = [...this.skills.keys()];
+      const available = names.length > 0 ? names.join(", ") : "(none)";
+      return `Error: Unknown skill '${name}'. Available: ${available}`;
     }
 
     return `<skill name="${name}">\n\n${skill.body}\n\n</skill>`;
-  }
-
-  /** Returns comma-separated list of loaded skill names, used in error messages. */
-  private availableNames(): string {
-    const names = [...this.skills.keys()];
-    return names.length > 0 ? names.join(", ") : "(none)";
   }
 }

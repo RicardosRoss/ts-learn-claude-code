@@ -12,6 +12,63 @@ export interface RegisterBuiltinToolsOptions {
   skillLoader: SkillLoader;
 }
 
+const VALID_STATUSES = new Set(["pending", "in_progress", "completed"]);
+
+/**
+ * Runtime type guard: extracts a string value from the input object.
+ * Throws a descriptive error if the value is missing or not a string.
+ */
+function readString(input: Record<string, unknown>, key: string): string {
+  const value = input[key];
+  if (typeof value === "string") {
+    return value;
+  }
+  throw new Error(`Invalid input: ${key} must be a string`);
+}
+
+/**
+ * Extracts an optional number from the input object.
+ * Returns undefined if the key is missing; throws if present but not a number.
+ */
+function readOptionalNumber(input: Record<string, unknown>, key: string): number | undefined {
+  if (!(key in input)) return undefined;
+  const value = input[key];
+  if (typeof value === "number") return value;
+  throw new Error(`Invalid input: ${key} must be a number`);
+}
+
+/** Extracts the "items" array from todo tool input, throws if missing or malformed. */
+function readTodoItems(input: Record<string, unknown>): TodoItemInput[] {
+  const raw = input.items;
+  if (!Array.isArray(raw)) throw new Error("Invalid input: items must be an array");
+
+  return raw.map((item: unknown, i: number) => {
+    if (typeof item !== "object" || item === null)
+      throw new Error(`Invalid input: items[${i}] must be an object`);
+
+    const obj = item as Record<string, unknown>;
+    const content = obj.content;
+    if (typeof content !== "string" || content.trim().length === 0)
+      throw new Error(`Invalid input: items[${i}].content is required`);
+
+    const status = obj.status;
+    if (typeof status !== "string" || !VALID_STATUSES.has(status))
+      throw new Error(
+        `Invalid input: items[${i}].status must be pending, in_progress, or completed`
+      );
+
+    const activeForm = obj.activeForm;
+    if (activeForm !== undefined && typeof activeForm !== "string")
+      throw new Error(`Invalid input: items[${i}].activeForm must be a string`);
+
+    return {
+      content,
+      status: status as TodoItemInput["status"],
+      ...(activeForm !== undefined ? { activeForm } : {})
+    };
+  });
+}
+
 /**
  * Registers all built-in tools for the current stage onto the given registry.
  * s05: bash + file tools (read/write/edit) + todo + load_skill.
@@ -138,60 +195,5 @@ export function registerBuiltinTools(options: RegisterBuiltinToolsOptions): void
       }
     },
     handler: async () => "Compressing..."
-  });
-}
-
-/**
- * Runtime type guard: extracts a string value from the input object.
- * Throws a descriptive error if the value is missing or not a string.
- */
-function readString(input: Record<string, unknown>, key: string): string {
-  const value = input[key];
-  if (typeof value === "string") {
-    return value;
-  }
-  throw new Error(`Invalid input: ${key} must be a string`);
-}
-
-/**
- * Extracts an optional number from the input object.
- * Returns undefined if the key is missing; throws if present but not a number.
- */
-function readOptionalNumber(input: Record<string, unknown>, key: string): number | undefined {
-  if (!(key in input)) return undefined;
-  const value = input[key];
-  if (typeof value === "number") return value;
-  throw new Error(`Invalid input: ${key} must be a number`);
-}
-
-const VALID_STATUSES = new Set(["pending", "in_progress", "completed"]);
-
-/** Extracts the "items" array from todo tool input, throws if missing or malformed. */
-function readTodoItems(input: Record<string, unknown>): TodoItemInput[] {
-  const raw = input.items;
-  if (!Array.isArray(raw)) throw new Error("Invalid input: items must be an array");
-
-  return raw.map((item: unknown, i: number) => {
-    if (typeof item !== "object" || item === null)
-      throw new Error(`Invalid input: items[${i}] must be an object`);
-
-    const obj = item as Record<string, unknown>;
-    const content = obj.content;
-    if (typeof content !== "string" || content.trim().length === 0)
-      throw new Error(`Invalid input: items[${i}].content is required`);
-
-    const status = obj.status;
-    if (typeof status !== "string" || !VALID_STATUSES.has(status))
-      throw new Error(`Invalid input: items[${i}].status must be pending, in_progress, or completed`);
-
-    const activeForm = obj.activeForm;
-    if (activeForm !== undefined && typeof activeForm !== "string")
-      throw new Error(`Invalid input: items[${i}].activeForm must be a string`);
-
-    return {
-      content,
-      status: status as TodoItemInput["status"],
-      ...(activeForm !== undefined ? { activeForm } : {})
-    };
   });
 }

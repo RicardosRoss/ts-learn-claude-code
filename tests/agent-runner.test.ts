@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 
 import { AgentRunner } from "../src/core/agent-runner.js";
+import { PermissionManager } from "../src/core/permission-manager.js";
 import { ToolRegistry } from "../src/core/tool-registry.js";
 import { TodoManager } from "../src/core/todo-manager.js";
 import {
@@ -160,6 +161,127 @@ describe("AgentRunner", () => {
     expect(result.finalText).toBe("both done");
   });
 
+  test("returns permission denial without running the tool handler", async () => {
+    const responses: ModelTurnResponse[] = [
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "deny-1", name: "bash", input: { command: "sudo ls" } }]
+      },
+      {
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "handled denial" }]
+      }
+    ];
+
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
+    const handler = vi.fn(async () => "should not run");
+    const registry = new ToolRegistry();
+    registry.register({ name: "bash", description: "bash", handler });
+
+    const runner = new AgentRunner({
+      modelClient: { createTurn },
+      toolRegistry: registry,
+      todoManager: new TodoManager(),
+      systemPrompt: "",
+      permissionManager: new PermissionManager()
+    });
+
+    const result = await runner.run([{ role: "user", content: "run sudo" }]);
+    const toolResultMsg = result.messages.find(
+      (msg) =>
+        msg.role === "user" &&
+        Array.isArray(msg.content) &&
+        msg.content.some((p) => p.type === "tool_result")
+    )!;
+    const toolResultPart = (toolResultMsg.content as unknown as Array<Record<string, unknown>>).find(
+      (p) => p.type === "tool_result"
+    )!;
+
+    expect(handler).not.toHaveBeenCalled();
+    expect(toolResultPart.content).toBe("Permission denied: matched deny rule (bash content: sudo *)");
+  });
+
+  test("does not treat sudo text in the middle of a bash command as a deny rule", async () => {
+    const responses: ModelTurnResponse[] = [
+      {
+        stopReason: "tool_use",
+        content: [
+          { type: "tool_use", id: "sudo-text", name: "bash", input: { command: "echo sudo ls" } }
+        ]
+      },
+      {
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "done" }]
+      }
+    ];
+
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
+    const requestPermission = vi.fn(async () => true);
+    const handler = vi.fn(async () => "printed sudo");
+    const registry = new ToolRegistry();
+    registry.register({ name: "bash", description: "bash", handler });
+
+    const runner = new AgentRunner({
+      modelClient: { createTurn },
+      toolRegistry: registry,
+      todoManager: new TodoManager(),
+      systemPrompt: "",
+      permissionManager: new PermissionManager(),
+      requestPermission
+    });
+
+    await runner.run([{ role: "user", content: "print sudo" }]);
+
+    expect(requestPermission).toHaveBeenCalledWith({
+      toolName: "bash",
+      toolUseId: "sudo-text",
+      input: { command: "echo sudo ls" },
+      reason: "requires confirmation: bash"
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+  });
+
+  test("runs an ask tool only after requestPermission approves it", async () => {
+    const responses: ModelTurnResponse[] = [
+      {
+        stopReason: "tool_use",
+        content: [
+          { type: "tool_use", id: "ask-1", name: "write_file", input: { path: "x.txt", content: "x" } }
+        ]
+      },
+      {
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "wrote" }]
+      }
+    ];
+
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
+    const requestPermission = vi.fn(async () => true);
+    const handler = vi.fn(async () => "Wrote x.txt");
+    const registry = new ToolRegistry();
+    registry.register({ name: "write_file", description: "write", handler });
+
+    const runner = new AgentRunner({
+      modelClient: { createTurn },
+      toolRegistry: registry,
+      todoManager: new TodoManager(),
+      systemPrompt: "",
+      permissionManager: new PermissionManager(),
+      requestPermission
+    });
+
+    const result = await runner.run([{ role: "user", content: "write" }]);
+
+    expect(requestPermission).toHaveBeenCalledWith({
+      toolName: "write_file",
+      toolUseId: "ask-1",
+      input: { path: "x.txt", content: "x" },
+      reason: "requires confirmation: write_file"
+    });
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(result.finalText).toBe("wrote");
+  });
+
   test("returns 'Unknown tool' error for unregistered tool name", async () => {
     const responses: ModelTurnResponse[] = [
       {
@@ -193,6 +315,45 @@ describe("AgentRunner", () => {
       (p) => p.type === "tool_result"
     )!;
     expect(toolResultPart.content).toContain("Unknown tool");
+  });
+
+  test("returns 'Unknown tool' even when permission manager is enabled", async () => {
+    const responses: ModelTurnResponse[] = [
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "u2", name: "nonexistent_tool", input: {} }]
+      },
+      {
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "handled" }]
+      }
+    ];
+
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
+    const requestPermission = vi.fn(async () => false);
+
+    const runner = new AgentRunner({
+      modelClient: { createTurn },
+      toolRegistry: new ToolRegistry(),
+      todoManager: new TodoManager(),
+      systemPrompt: "",
+      permissionManager: new PermissionManager(),
+      requestPermission
+    });
+
+    const result = await runner.run([{ role: "user", content: "use unknown" }]);
+
+    const toolResultMsg = result.messages.find(
+      (msg) =>
+        msg.role === "user" &&
+        Array.isArray(msg.content) &&
+        msg.content.some((p) => p.type === "tool_result")
+    )!;
+    const toolResultPart = (toolResultMsg.content as unknown as Array<Record<string, unknown>>).find(
+      (p) => p.type === "tool_result"
+    )!;
+    expect(toolResultPart.content).toBe("Unknown tool: nonexistent_tool");
+    expect(requestPermission).not.toHaveBeenCalled();
   });
 
   test("returns error message when tool handler throws", async () => {

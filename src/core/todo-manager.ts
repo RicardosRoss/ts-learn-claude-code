@@ -38,6 +38,34 @@ export class TodoManager {
   }
 
   /**
+   * Returns the rendered plan text.
+   * Format: [x] content | [>] content <- activeForm | [ ] content
+   * Plus summary line: (N/M completed)
+   * Returns placeholder if no plan exists.
+   */
+  render(): string {
+    if (this.state.items.length === 0) return "No session plan yet.";
+
+    const lines: string[] = [];
+    const markers: Record<TodoStatus, string> = {
+      completed: "[x]",
+      in_progress: "[>]",
+      pending: "[ ]"
+    };
+
+    for (const item of this.state.items) {
+      const marker = markers[item.status];
+      const suffix =
+        item.status === "in_progress" && item.activeForm ? ` (${item.activeForm})` : "";
+      lines.push(`${marker} ${item.content}${suffix}`);
+    }
+
+    const done = this.state.items.filter((i) => i.status === "completed").length;
+    lines.push(`\n(${done}/${this.state.items.length} completed)`);
+    return lines.join("\n");
+  }
+
+  /**
    * Replaces the current plan with the given items after validation.
    * Resets roundsSinceUpdate to 0.
    * Returns the rendered plan text (or an error string).
@@ -65,34 +93,6 @@ export class TodoManager {
 
     this.state.roundsSinceUpdate = 0;
     return this.render();
-  }
-
-  /**
-   * Returns the rendered plan text.
-   * Format: [x] content | [>] content <- activeForm | [ ] content
-   * Plus summary line: (N/M completed)
-   * Returns placeholder if no plan exists.
-   */
-  render(): string {
-    if (this.state.items.length === 0) return "No session plan yet.";
-
-    const lines: string[] = [];
-    const markers: Record<TodoStatus, string> = {
-      completed: "[x]",
-      in_progress: "[>]",
-      pending: "[ ]"
-    };
-
-    for (const item of this.state.items) {
-      const marker = markers[item.status];
-      const suffix =
-        item.status === "in_progress" && item.activeForm ? ` (${item.activeForm})` : "";
-      lines.push(`${marker} ${item.content}${suffix}`);
-    }
-
-    const done = this.state.items.filter((i) => i.status === "completed").length;
-    lines.push(`\n(${done}/${this.state.items.length} completed)`);
-    return lines.join("\n");
   }
 
   /** Increments roundsSinceUpdate when a round completes without calling todo. */

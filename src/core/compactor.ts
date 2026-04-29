@@ -18,6 +18,24 @@ export interface CompactorOptions {
 }
 
 /**
+ * 从 assistant 消息中构建 tool_use_id → tool_name 的映射。
+ * 用于 microCompact 时确定 tool_result 来自哪个工具。
+ */
+function buildToolNameMap(messages: AgentMessage[]): Map<string, string> {
+  const map = new Map<string, string>();
+  for (const msg of messages) {
+    if (msg.role === "assistant") {
+      for (const block of msg.content) {
+        if (block.type === "tool_use") {
+          map.set(block.id, block.name);
+        }
+      }
+    }
+  }
+  return map;
+}
+
+/**
  * 三层上下文压缩管线：
  *   Layer 1 (microCompact): 每轮静默替换旧 tool_result 为占位符
  *   Layer 2 (autoCompact):  token 超阈值时保存 transcript + LLM 摘要
@@ -113,9 +131,7 @@ export class Compactor {
     // 7. 请求 LLM 生成摘要
     const response = await this.modelClient.createTurn({
       systemPrompt: "Summarize the conversation, preserving key decisions and context.",
-      messages: [
-        { role: "user", content: `Summarize this conversation:\n\n${conversationText}` }
-      ],
+      messages: [{ role: "user", content: `Summarize this conversation:\n\n${conversationText}` }],
       tools: []
     });
 
@@ -136,22 +152,4 @@ export class Compactor {
       }
     ];
   }
-}
-
-/**
- * 从 assistant 消息中构建 tool_use_id → tool_name 的映射。
- * 用于 microCompact 时确定 tool_result 来自哪个工具。
- */
-function buildToolNameMap(messages: AgentMessage[]): Map<string, string> {
-  const map = new Map<string, string>();
-  for (const msg of messages) {
-    if (msg.role === "assistant") {
-      for (const block of msg.content) {
-        if (block.type === "tool_use") {
-          map.set(block.id, block.name);
-        }
-      }
-    }
-  }
-  return map;
 }

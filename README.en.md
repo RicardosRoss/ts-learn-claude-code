@@ -2,83 +2,108 @@
 
 English | [中文](./README.md)
 
-A stage-by-stage TypeScript reimplementation of the [learn-claude-code](https://learn.shareai.run/zh/) `s01-s12` curriculum. Each stage strictly aligns with the original lesson's capabilities — no jumping ahead.
+A staged TypeScript reconstruction of the [learn-claude-code](https://learn.shareai.run/zh/) curriculum for building an agent system that stays understandable, testable, and reviewable.
 
-## Current Stage: s03 — Todo Write + Session Planning
+This repository now follows an explicit alignment policy:
 
-Stage development doc:
+- `s01-s06` keep the repository's historical numbering because they still match the current upstream course closely
+- Starting from `s07`, all later stages align to the upstream course structure verified on `2026-04-26`
+- Existing `feat(s04)` / `feat(s05)` / `feat(s06)` history is preserved; only the forward learning path is realigned
 
-- [docs/feat/s03-todo-write-development.md](./docs/feat/s03-todo-write-development.md)
-- [docs/feat/s03-todo-write-api-reference.md](./docs/feat/s03-todo-write-api-reference.md)
+See:
 
-Keep the `s02` tool layer unchanged, then add a session todo plan, a single active step, and reminder nudges.
+- [docs/feat/learn-claude-code-realignment.md](./docs/feat/learn-claude-code-realignment.md)
+- [docs/feat/staged-branch-workflow.md](./docs/feat/staged-branch-workflow.md)
 
-## Current Base Structure (Inherited from s01)
+## Current Alignment Status
 
-```
+The current working baseline has advanced through `s07 Permissions`, and this branch prepares `s08 Hooks`:
+
+- [docs/feat/s07-permissions-development.md](./docs/feat/s07-permissions-development.md)
+- [docs/feat/s07-permissions-api-reference.md](./docs/feat/s07-permissions-api-reference.md)
+- [docs/feat/s08-hooks-development.md](./docs/feat/s08-hooks-development.md)
+- [docs/feat/s08-hooks-api-reference.md](./docs/feat/s08-hooks-api-reference.md)
+
+That means:
+
+- The first seven stages already exist in code and docs
+- The next stage is no longer the old planned `s07 task system`
+- Current work should resume from **`s08 Hooks`** to keep matching the upstream course
+
+## Current Base Structure
+
+```text
 src/
 ├── core/
-│   ├── types.ts                  # Runtime protocol types
-│   ├── tool-registry.ts          # Tool registry
-│   ├── anthropic-model-client.ts # Anthropic-compatible model client
-│   └── agent-runner.ts           # Agent main loop
+│   ├── types.ts
+│   ├── tool-registry.ts
+│   ├── anthropic-model-client.ts
+│   ├── agent-runner.ts
+│   ├── todo-manager.ts
+│   ├── subagent-factory.ts
+│   └── compactor.ts
 ├── tools/
-│   ├── bash-tool.ts              # Bash tool implementation
-│   └── builtin-tools.ts          # Tool assembly layer (s01: bash only)
+│   ├── bash-tool.ts
+│   ├── file-tools.ts
+│   ├── path-policy.ts
+│   └── builtin-tools.ts
 └── cli/
-    └── repl.ts                   # Interactive REPL entry point
+    └── repl.ts
 ```
 
 ## Quick Start
 
 ```bash
-# Install dependencies
 npm install
-
-# Copy and fill in environment variables
 cp .env.example .env
-# Edit .env with your ANTHROPIC_API_KEY and MODEL_ID
+# Edit .env and set ANTHROPIC_API_KEY and MODEL_ID
 
-# Run tests
 npm test
-
-# Start REPL
 npm run repl
 ```
 
-## Available Scripts
+## Scripts
 
-| Command         | Description                 |
-| --------------- | --------------------------- |
-| `npm run build` | TypeScript compilation      |
-| `npm run lint`  | ESLint check                |
-| `npm run test`  | Run tests                   |
-| `npm run repl`  | Start interactive Agent CLI |
+| Command         | Description                     |
+| --------------- | ------------------------------- |
+| `npm run build` | TypeScript build                |
+| `npm run lint`  | ESLint check                    |
+| `npm run test`  | Run tests                       |
+| `npm run repl`  | Start the interactive Agent CLI |
 
-## Branch & Stage Mapping
+## Stage and Branch Mapping
 
-Each stage maps to a dedicated branch `lab/s0N-*`, strictly aligning with the [learn-claude-code](https://learn.shareai.run/zh/) curriculum examples:
+### Part 1: Preserve historical numbering
 
-| Branch            | Curriculum                  | Core Capability                                | Status     |
-| ----------------- | --------------------------- | ---------------------------------------------- | ---------- |
-| `lab/s01-*`       | `s01_agent_loop.py`         | While loop + bash tool + tool_result feedback  | In Progress |
-| `lab/s02-*`       | `s02_tool_use.py`           | Multi-tool dispatch + file tools + path safety | In Progress |
-| `lab/s03-*`       | `s03_todo_write.py`         | Explicit task state + reminder mechanism       | In Progress |
-| `lab/s04-*`       | `s04_subagent.py`           | Subtask context isolation                      | Not Started |
-| `lab/s05-*`       | `s05_skill_loading.py`      | On-demand skill loading                        | Not Started |
-| `lab/s06-*`       | `s06_context_compact.py`    | Context compaction                             | Not Started |
-| `lab/s07-*`       | `s07_task_system.py`        | Persistent task graph                          | Not Started |
-| `lab/s08-*`       | `s08_background_tasks.py`   | Background execution + notification queue      | Not Started |
-| `lab/s09-*`       | `s09_agent_teams.py`        | Persistent teammates + communication           | Not Started |
-| `lab/s10-*`       | `s10_team_protocols.py`     | Structured negotiation protocols               | Not Started |
-| `lab/s11-*`       | `s11_autonomous_agents.py`  | Idle-poll-claim cycle                          | Not Started |
-| `lab/s12-*`       | `s12_worktree_task_isolation.py` | Task and directory isolation              | Not Started |
+| Branch               | Upstream lesson       | Core capability                                | Repo status |
+| -------------------- | --------------------- | ---------------------------------------------- | ----------- |
+| `lab/s01-agent-loop` | `s01 Agent Loop`      | while loop + tool_result feedback              | Implemented |
+| `lab/s02-tool-use`   | `s02 Tool Use`        | multi-tool dispatch + file tools + path safety | Implemented |
+| `lab/s03-todo-write` | `s03 Todo Write`      | in-session todo + active step + reminders      | Implemented |
+| `lab/s04-subagents`  | `s04 Subagents`       | isolated subtask context                       | Implemented |
+| `lab/s05-skills`     | `s05 Skills`          | skill indexing and on-demand loading           | Implemented |
+| `lab/s06-compact`    | `s06 Context Compact` | micro/auto/manual compaction pipeline          | Implemented |
 
-## Completed Stages
+### Part 2: Align `s07+` to the current upstream course
 
-(None yet. A stage is marked complete after passing lint, build, tests, and being tagged `s0N-done`.)
+| Branch                       | Upstream lesson          | Core capability                                          | Repo status |
+| ---------------------------- | ------------------------ | -------------------------------------------------------- | ----------- |
+| `lab/s07-permissions`        | `s07 Permissions`        | execution intent passes through a permission gate        | Completed   |
+| `lab/s08-hooks`              | `s08 Hooks`              | inject behavior at fixed lifecycle points                | Current     |
+| `lab/s09-memory`             | `s09 Memory`             | persist only cross-session knowledge that remains useful | Pending     |
+| `lab/s10-system-prompt`      | `s10 System Prompt`      | build model input as a pipeline                          | Pending     |
+| `lab/s11-error-recovery`     | `s11 Error Recovery`     | continue/retry/recover instead of crashing               | Pending     |
+| `lab/s12-task-system`        | `s12 Task System`        | persistent task graph and dependencies                   | Pending     |
+| `lab/s13-background-tasks`   | `s13 Background Tasks`   | move slow execution off the foreground path              | Pending     |
+| `lab/s14-scheduling`         | `s14 Scheduling`         | time-based future work                                   | Pending     |
+| `lab/s15-agent-teams`        | `s15 Agent Teams`        | persistent teammates, roster, inboxes                    | Pending     |
+| `lab/s16-team-protocols`     | `s16 Team Protocols`     | request-response collaboration contracts                 | Pending     |
+| `lab/s17-autonomous-agents`  | `s17 Autonomous Agents`  | idle teammates claim work autonomously                   | Pending     |
+| `lab/s18-worktree-isolation` | `s18 Worktree Isolation` | isolated directories and execution lanes                 | Pending     |
+| `lab/s19-mcp-plugins`        | `s19 MCP and Plugins`    | external capability bus and unified routing              | Pending     |
 
 ## Learning Mode
 
-- `src/` — Your own stage-by-stage implementations
-- Each stage must pass validation gates before advancing to the next
+- `src/` remains a practice skeleton with Chinese implementation notes
+- Each stage should finish its main flow before adding broader hardening
+- A new stage should branch from the previous stage tag instead of running multiple stages in parallel

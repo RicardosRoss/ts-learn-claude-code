@@ -29,8 +29,21 @@ export class SubagentFactory {
     this.parentToolRegistry = options.parentToolRegistry;
     this.todoManager = options.todoManager;
     this.workspaceRoot = options.workspaceRoot ?? process.cwd();
-    this.subagentSystemPrompt = options.subagentSystemPrompt
-      ?? `You are a coding subagent at ${this.workspaceRoot}. Complete the given task, then summarize your findings.`;
+    this.subagentSystemPrompt =
+      options.subagentSystemPrompt ??
+      `You are a coding subagent at ${this.workspaceRoot}. Complete the given task, then summarize your findings.`;
+  }
+
+  /** Creates a child registry by filtering out the 'task' tool. */
+  private createChildRegistry(): ToolRegistry {
+    const childToolNames = new Set(this.parentToolRegistry.list().map((tool) => tool.name));
+    childToolNames.delete("task");
+    return this.parentToolRegistry.filterByNames(childToolNames);
+  }
+
+  /** Creates a fresh message list for the child agent. */
+  private createFreshMessages(prompt: string): AgentMessage[] {
+    return [{ role: "user", content: prompt }];
   }
 
   /**
@@ -58,17 +71,5 @@ export class SubagentFactory {
 
     const result = await runner.run(messages);
     return result.finalText || "(no summary)";
-  }
-
-  /** Creates a child registry by filtering out the 'task' tool. */
-  private createChildRegistry(): ToolRegistry {
-    const childToolNames = new Set(this.parentToolRegistry.list().map((tool) => tool.name));
-    childToolNames.delete("task");
-    return this.parentToolRegistry.filterByNames(childToolNames);
-  }
-
-  /** Creates a fresh message list for the child agent. */
-  private createFreshMessages(prompt: string): AgentMessage[] {
-    return [{ role: "user", content: prompt }];
   }
 }

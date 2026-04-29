@@ -20,6 +20,127 @@ export interface AnthropicModelClientOptions {
   maxTokens?: number;
 }
 
+/** Resolves max output tokens from explicit option, env variable, or default (8000). */
+function resolveMaxTokens(explicitMaxTokens: number | undefined): number {
+  if (typeof explicitMaxTokens === "number" && Number.isFinite(explicitMaxTokens)) {
+    return explicitMaxTokens;
+  }
+
+  const raw = process.env.MAX_TOKENS;
+  if (!raw) {
+    return 8000;
+  }
+
+  const parsed = Number(raw);
+  return Number.isFinite(parsed) ? parsed : 8000;
+}
+
+/** Converts internal tool definitions to Anthropic SDK tool format. */
+function toAnthropicTools(tools: ToolDefinition[]): Array<Record<string, unknown>> {
+  return tools.map((tool) => ({
+    name: tool.name,
+    description: tool.description,
+    input_schema: tool.inputSchema ?? {
+      type: "object",
+      properties: {},
+      required: []
+    }
+  }));
+}
+
+/** Converts user content (string or structured parts) to SDK-compatible format. */
+function toAnthropicUserContent(content: UserContent): string | Array<Record<string, unknown>> {
+  if (typeof content === "string") {
+    return content;
+  }
+
+  return content.map((part) => {
+    if (part.type === "tool_result") {
+      return {
+        type: "tool_result",
+        tool_use_id: part.toolUseId,
+        content: part.content
+      };
+    }
+
+    return {
+      type: "text",
+      text: part.text
+    };
+  });
+}
+
+/** Converts a single assistant content block to SDK format. */
+function toAnthropicAssistantBlock(block: ModelContentBlock): Record<string, unknown> {
+  if (block.type === "text") {
+    return { type: "text", text: block.text };
+  }
+
+  return {
+    type: "tool_use",
+    id: block.id,
+    name: block.name,
+    input: block.input
+  };
+}
+
+/** Converts internal message history to Anthropic SDK message format. */
+function toAnthropicMessages(messages: AgentMessage[]): Array<Record<string, unknown>> {
+  return messages.map((message) => {
+    if (message.role === "user") {
+      return {
+        role: "user",
+        content: toAnthropicUserContent(message.content)
+      };
+    }
+
+    return {
+      role: "assistant",
+      content: message.content.map((block) => toAnthropicAssistantBlock(block))
+    };
+  });
+}
+
+/** Ensures tool input is a plain object; returns empty object for malformed input. */
+function normalizeToolInput(block: Record<string, unknown>): Record<string, unknown> {
+  const raw = block.input;
+  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+    return {};
+  }
+  return raw as Record<string, unknown>;
+}
+
+/** Parses raw SDK response content into internal ModelContentBlock types. */
+function fromAnthropicContent(content: Array<Record<string, unknown>>): ModelContentBlock[] {
+  const result: ModelContentBlock[] = [];
+
+  for (const block of content) {
+    if (block.type === "text" && typeof block.text === "string") {
+      result.push({ type: "text", text: block.text });
+      continue;
+    }
+
+    if (
+      block.type === "tool_use" &&
+      typeof block.id === "string" &&
+      typeof block.name === "string"
+    ) {
+      result.push({
+        type: "tool_use",
+        id: block.id,
+        name: block.name,
+        input: normalizeToolInput(block)
+      } satisfies ModelToolUseBlock);
+    }
+  }
+
+  if (result.length === 0) {
+    result.push({ type: "text", text: "" });
+  }
+
+  return result;
+}
+
 /**
  * Model client adapter for the Anthropic-compatible API.
  * Handles environment variable loading, SDK initialization,
@@ -72,125 +193,4 @@ export class AnthropicModelClient implements ModelClient {
       content: fromAnthropicContent(response.content as unknown as Array<Record<string, unknown>>)
     };
   }
-}
-
-/** Resolves max output tokens from explicit option, env variable, or default (8000). */
-function resolveMaxTokens(explicitMaxTokens: number | undefined): number {
-  if (typeof explicitMaxTokens === "number" && Number.isFinite(explicitMaxTokens)) {
-    return explicitMaxTokens;
-  }
-
-  const raw = process.env.MAX_TOKENS;
-  if (!raw) {
-    return 8000;
-  }
-
-  const parsed = Number(raw);
-  return Number.isFinite(parsed) ? parsed : 8000;
-}
-
-/** Converts internal tool definitions to Anthropic SDK tool format. */
-function toAnthropicTools(tools: ToolDefinition[]): Array<Record<string, unknown>> {
-  return tools.map((tool) => ({
-    name: tool.name,
-    description: tool.description,
-    input_schema: tool.inputSchema ?? {
-      type: "object",
-      properties: {},
-      required: []
-    }
-  }));
-}
-
-/** Converts internal message history to Anthropic SDK message format. */
-function toAnthropicMessages(messages: AgentMessage[]): Array<Record<string, unknown>> {
-  return messages.map((message) => {
-    if (message.role === "user") {
-      return {
-        role: "user",
-        content: toAnthropicUserContent(message.content)
-      };
-    }
-
-    return {
-      role: "assistant",
-      content: message.content.map((block) => toAnthropicAssistantBlock(block))
-    };
-  });
-}
-
-/** Converts user content (string or structured parts) to SDK-compatible format. */
-function toAnthropicUserContent(content: UserContent): string | Array<Record<string, unknown>> {
-  if (typeof content === "string") {
-    return content;
-  }
-
-  return content.map((part) => {
-    if (part.type === "tool_result") {
-      return {
-        type: "tool_result",
-        tool_use_id: part.toolUseId,
-        content: part.content
-      };
-    }
-
-    return {
-      type: "text",
-      text: part.text
-    };
-  });
-}
-
-/** Converts a single assistant content block to SDK format. */
-function toAnthropicAssistantBlock(block: ModelContentBlock): Record<string, unknown> {
-  if (block.type === "text") {
-    return { type: "text", text: block.text };
-  }
-
-  return {
-    type: "tool_use",
-    id: block.id,
-    name: block.name,
-    input: block.input
-  };
-}
-
-/** Parses raw SDK response content into internal ModelContentBlock types. */
-function fromAnthropicContent(content: Array<Record<string, unknown>>): ModelContentBlock[] {
-  const result: ModelContentBlock[] = [];
-
-  for (const block of content) {
-    if (block.type === "text" && typeof block.text === "string") {
-      result.push({ type: "text", text: block.text });
-      continue;
-    }
-
-    if (
-      block.type === "tool_use" &&
-      typeof block.id === "string" &&
-      typeof block.name === "string"
-    ) {
-      result.push({
-        type: "tool_use",
-        id: block.id,
-        name: block.name,
-        input: normalizeToolInput(block)
-      } satisfies ModelToolUseBlock);
-    }
-  }
-
-  if (result.length === 0) {
-    result.push({ type: "text", text: "" });
-  }
-
-  return result;
-}
-
-/** Ensures tool input is a plain object; returns empty object for malformed input. */
-function normalizeToolInput(block: Record<string, unknown>): Record<string, unknown> {
-  const raw = block.input;
-  if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
-    return {};
-  }
-  return raw as Record<string, unknown>;
 }

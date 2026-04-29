@@ -10,6 +10,7 @@ import type {
 import type { ToolExecutionContext } from "./tool-registry.js";
 import type { TodoManager } from "./todo-manager.js";
 import type { Compactor } from "./compactor.js";
+import type { PermissionManager } from "./permission-manager.js";
 import { ToolRegistry } from "./tool-registry.js";
 
 /** Options for constructing an AgentRunner instance. */
@@ -22,6 +23,10 @@ export interface AgentRunnerOptions {
   maxTurns?: number;
   /** s06: 可选 Compactor，启用三层压缩管线。 */
   compactor?: Compactor;
+  /** s07: 可选 PermissionManager，启用工具执行前权限判断。 */
+  permissionManager?: PermissionManager;
+  /** s07: ask 分支的人类确认回调。 */
+  requestPermission?: (request: PermissionRequest) => Promise<boolean> | boolean;
   onToolExecution?: (event: ToolExecutionEvent) => void;
 }
 
@@ -33,6 +38,25 @@ export interface ToolExecutionEvent {
   input: Record<string, unknown>;
   output: string;
   isError: boolean;
+}
+
+/** Request passed to the human confirmation callback for ask decisions. */
+export interface PermissionRequest {
+  toolName: string;
+  toolUseId: string;
+  input: Record<string, unknown>;
+  reason: string;
+}
+
+/** Extracts and concatenates all text blocks from the model's response content. */
+function extractText(blocks: ModelContentBlock[]): string {
+  let resText = "";
+  for (const textblock of blocks) {
+    if (textblock.type === "text") {
+      resText += textblock.text + "\n";
+    }
+  }
+  return resText.trim();
 }
 
 /**
@@ -48,6 +72,8 @@ export class AgentRunner {
   private readonly execContext: ToolExecutionContext;
   private readonly maxTurns: number;
   private readonly compactor?: Compactor;
+  private readonly permissionManager?: PermissionManager;
+  private readonly requestPermission?: (request: PermissionRequest) => Promise<boolean> | boolean;
   private readonly onToolExecution?: (event: ToolExecutionEvent) => void;
 
   constructor(options: AgentRunnerOptions) {
@@ -58,6 +84,8 @@ export class AgentRunner {
     this.execContext = { workspaceRoot: options.workspaceRoot ?? process.cwd() };
     this.maxTurns = options.maxTurns ?? 30;
     this.compactor = options.compactor;
+    this.permissionManager = options.permissionManager;
+    this.requestPermission = options.requestPermission;
     this.onToolExecution = options.onToolExecution;
   }
 
@@ -130,24 +158,67 @@ export class AgentRunner {
     throw new Error(`Exceeded max turns: ${this.maxTurns}`);
   }
 
+  /** Safely invokes the optional onToolExecution callback. */
+  private emitToolExecution(event: ToolExecutionEvent): void {
+    if (typeof this.onToolExecution === "function") {
+      this.onToolExecution(event);
+    }
+  }
+
+  /** s07: Runs the permission decision before the actual tool handler. */
+  private async checkPermission(block: ModelToolUseBlock): Promise<ToolResultPart | null> {
+    if (typeof this.permissionManager === "undefined") {
+      return null;
+    }
+
+    const decision = this.permissionManager.check(block.name, block.input);
+    if (decision.behavior === "allow") {
+      return null;
+    }
+
+    if (decision.behavior === "deny") {
+      return {
+        type: "tool_result",
+        toolUseId: block.id,
+        content: `Permission denied: ${decision.reason}`
+      };
+    }
+
+    const approved = await this.requestPermission?.({
+      toolName: block.name,
+      toolUseId: block.id,
+      input: block.input,
+      reason: decision.reason
+    });
+
+    if (approved === true) {
+      return null;
+    }
+
+    return {
+      type: "tool_result",
+      toolUseId: block.id,
+      content: `Permission denied by user: ${decision.reason}`
+    };
+  }
+
   /**
    * Executes a single tool call. Looks up the handler from the registry,
    * catches all exceptions, and always returns a ToolResultPart
    * (never throws — errors are surfaced to the model as tool result content).
    */
   private async executeTool(block: ModelToolUseBlock): Promise<ToolResultPart> {
-    this.emitToolExecution({
-      phase: "before",
-      toolName: block.name,
-      toolUseId: block.id,
-      input: block.input,
-      output: "",
-      isError: false
-    });
-
     const tool = this.toolRegistry.get(block.name);
     if (typeof tool === "undefined") {
       const unknownToolMessage = `Unknown tool: ${block.name}`;
+      this.emitToolExecution({
+        phase: "before",
+        toolName: block.name,
+        toolUseId: block.id,
+        input: block.input,
+        output: "",
+        isError: false
+      });
       this.emitToolExecution({
         phase: "after",
         toolName: block.name,
@@ -163,6 +234,20 @@ export class AgentRunner {
         content: unknownToolMessage
       };
     }
+
+    const permissionResult = await this.checkPermission(block);
+    if (permissionResult !== null) {
+      return permissionResult;
+    }
+
+    this.emitToolExecution({
+      phase: "before",
+      toolName: block.name,
+      toolUseId: block.id,
+      input: block.input,
+      output: "",
+      isError: false
+    });
 
     try {
       const toolResult = await tool.handler(block.input, this.execContext);
@@ -192,22 +277,4 @@ export class AgentRunner {
       };
     }
   }
-
-  /** Safely invokes the optional onToolExecution callback. */
-  private emitToolExecution(event: ToolExecutionEvent): void {
-    if (typeof this.onToolExecution === "function") {
-      this.onToolExecution(event);
-    }
-  }
-}
-
-/** Extracts and concatenates all text blocks from the model's response content. */
-function extractText(blocks: ModelContentBlock[]): string {
-  let resText = "";
-  for (const textblock of blocks) {
-    if (textblock.type === "text") {
-      resText += textblock.text + "\n";
-    }
-  }
-  return resText.trim();
 }
