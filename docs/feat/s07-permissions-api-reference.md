@@ -41,7 +41,7 @@ interface PermissionRule {
 
 - `tool`: 规则作用到哪个工具名
 - `behavior`: 命中后的行为
-- `path`: 仅当输入里存在 `path` 字段时参与匹配
+- `path`: 仅当输入里存在 `file_path` 或 `path` 字段时参与匹配
 - `content`: 仅当输入里存在 `command` 或 `content` 字段时参与匹配
 
 ### `PermissionDecision`
@@ -65,6 +65,39 @@ interface PermissionDecision {
 { "behavior": "deny", "reason": "matched deny rule (bash content: sudo *)" }
 ```
 
+### `PermissionCheckContext`
+
+```typescript
+interface PermissionCheckContext {
+  toolName: string;
+  input: Record<string, unknown>;
+  mode: PermissionMode;
+  allowRules: PermissionRule[];
+  denyRules: PermissionRule[];
+  readOnlyTools: Set<string>;
+  writeTools: Set<string>;
+  toolPolicies: Map<string, PermissionToolPolicy>;
+}
+```
+
+这是每个权限检查步骤共享的上下文。它把当前工具调用、session mode、显式规则、工具集合和策略表放在同一个对象里。
+
+### `PermissionCheck`
+
+```typescript
+type PermissionCheck = (context: PermissionCheckContext) => PermissionDecision | null;
+```
+
+返回 `PermissionDecision` 表示该步骤已经给出结论；返回 `null` 表示继续执行后续检查。
+
+### `PermissionToolPolicy`
+
+```typescript
+type PermissionToolPolicy = (context: PermissionCheckContext) => PermissionDecision | null;
+```
+
+单个工具的策略函数。当前默认策略只给只读工具注册自动放行策略。
+
 ---
 
 ## 3. 构造函数
@@ -82,6 +115,7 @@ interface PermissionManagerOptions {
   denyRules?: PermissionRule[];
   readOnlyTools?: Set<string>;
   writeTools?: Set<string>;
+  toolPolicies?: Map<string, PermissionToolPolicy>;
 }
 ```
 
@@ -89,23 +123,36 @@ interface PermissionManagerOptions {
 
 - `mode` 默认值：`"default"`
 - `allowRules` 默认值：空数组
-- `denyRules` 默认值：空数组
-- `readOnlyTools` 默认值建议至少包含：
+- `denyRules` 默认值：
+
+```typescript
+[
+  { tool: "bash", behavior: "deny", content: "sudo " },
+  { tool: "write_file", behavior: "deny", path: ".git/" },
+  { tool: "edit_file", behavior: "deny", path: ".git/" }
+]
+```
+
+- `readOnlyTools` 默认值：
 
 ```typescript
 new Set(["read_file", "todo", "load_skill", "compact"])
 ```
 
-- `writeTools` 默认值建议至少包含：
+- `writeTools` 默认值：
 
 ```typescript
 new Set(["write_file", "edit_file", "bash"])
 ```
 
+- `toolPolicies` 默认值：由 `readOnlyTools` 生成，默认给 `read_file`、`todo`、`load_skill`、`compact` 注册 `allowReadOnlyTool`
+- 传入 `toolPolicies` 时，会覆盖或补充默认策略表里的同名工具策略
+
 ### 边界情况
 
-- 不传 `options` 时，应使用默认 mode 和默认工具集合
+- 不传 `options` 时，使用默认 mode、默认工具集合、默认 deny rules 和默认只读工具策略表
 - 即使 `allowRules` / `denyRules` 为空，`check()` 也必须返回合法的 `PermissionDecision`
+- 如果传入空的 `denyRules: []`，会替换默认 deny rules
 
 ### 所用 Node.js 方法
 
@@ -127,8 +174,9 @@ new Set(["write_file", "edit_file", "bash"])
 
 1. 先检查 `denyRules`
 2. 再检查当前 `mode`
-3. 再检查 `allowRules`
-4. 都没命中时，返回 `ask`
+3. 再检查 `toolPolicies`
+4. 再检查 `allowRules`
+5. 都没命中时，返回 `ask`
 
 ### 返回值的精确格式
 
@@ -163,12 +211,6 @@ plan mode blocks write tool: write_file
 matched allow rule (tool: read_file)
 ```
 
-或：
-
-```text
-auto mode allows read-only tool: read_file
-```
-
 #### ask
 
 ```text
@@ -186,9 +228,9 @@ permissionManager.check("bash", { command: "sudo rm -rf /tmp/demo" })
 permissionManager.check("write_file", { path: "src/app.ts", content: "hello" })
 // -> { behavior: "deny", reason: "plan mode blocks write tool: write_file" }
 
-// 3. auto mode 放行读操作
+// 3. 默认只读工具策略放行
 permissionManager.check("read_file", { path: "README.md" })
-// -> { behavior: "allow", reason: "auto mode allows read-only tool: read_file" }
+// -> { behavior: "allow", reason: "matched allow rule (tool: read_file)" }
 
 // 4. 默认灰区走 ask
 permissionManager.check("edit_file", {
@@ -197,6 +239,18 @@ permissionManager.check("edit_file", {
   new_text: "bar"
 })
 // -> { behavior: "ask", reason: "requires confirmation: edit_file" }
+
+// 5. 自定义工具策略覆盖默认只读放行
+const permissionManager = new PermissionManager({
+  toolPolicies: new Map([
+    [
+      "read_file",
+      () => ({ behavior: "ask", reason: "custom read policy" })
+    ]
+  ])
+});
+permissionManager.check("read_file", { path: "README.md" })
+// -> { behavior: "ask", reason: "custom read policy" }
 ```
 
 ### 边界情况
@@ -208,8 +262,10 @@ permissionManager.check("edit_file", {
 { "behavior": "ask", "reason": "requires confirmation: unknown tool <name>" }
 ```
 
-- 如果规则里声明了 `path`，但 `input.path` 不是字符串，则该规则视为未命中，不抛异常
+- 如果规则里声明了 `path`，但 `input.file_path` 和 `input.path` 都不是字符串，则该规则视为未命中，不抛异常
 - 如果规则里声明了 `content`，但 `input.command` / `input.content` 都不是字符串，则该规则视为未命中，不抛异常
+- `mode: "auto"` 当前没有额外分支，行为与 `default` 一样依赖 deny rules、tool policies、allow rules 和 default ask
+- `mode: "plan"` 会在 `toolPolicies` 之前拒绝 `writeTools` 中的工具
 
 ### 所用 Node.js 方法
 
@@ -225,10 +281,10 @@ permissionManager.check("edit_file", {
 ### 推荐匹配语义
 
 - `rule.tool` 必须与 `toolName` 完全相等
-- `rule.path` 存在时，要求 `input.path` 是字符串并且 `includes(rule.path)`
+- `rule.path` 存在时，先取 `input.file_path`，不存在时再取 `input.path`；取到的值必须是字符串并且 `includes(rule.path)`
 - `rule.content` 存在时：
-  - 若 `input.command` 是字符串，则检查 `input.command.includes(rule.content)`
-  - 否则若 `input.content` 是字符串，则检查 `input.content.includes(rule.content)`
+  - 若规则是 `{ tool: "bash", content: "sudo " }`，则要求 `input.command.trimStart().startsWith("sudo ")`
+  - 其它规则先取 `input.command`，不存在时再取 `input.content`；取到的值必须是字符串并且 `includes(rule.content)`
 - `path` 与 `content` 同时存在时，两者都要命中
 
 ### 输入/输出示例
@@ -242,6 +298,13 @@ matchesRule(
 // -> true
 
 matchesRule(
+  { tool: "bash", behavior: "deny", content: "sudo " },
+  "bash",
+  { command: "echo sudo ls" }
+)
+// -> false
+
+matchesRule(
   { tool: "write_file", behavior: "deny", path: ".git/" },
   "write_file",
   { path: "src/app.ts", content: "x" }
@@ -253,6 +316,8 @@ matchesRule(
 
 - `toolName` 不相等时立即返回 `false`
 - 没有 `path` 和 `content` 的规则，只要工具名相等就命中
+- `bash` 的 `sudo ` deny 规则只匹配去掉左侧空白后的命令开头，不匹配命令中间的 `sudo`
+- `file_path` 和 `path` 都不存在时，带 `path` 的规则不命中
 
 ### 所用 Node.js 方法
 
@@ -269,20 +334,27 @@ matchesRule(
 ```typescript
 interface AgentRunnerOptions {
   // ... s06 已有字段
-  permissionManager: PermissionManager;
-  requestPermission?: (
-    toolName: string,
-    input: Record<string, unknown>,
-    decision: PermissionDecision
-  ) => Promise<boolean>;
+  permissionManager?: PermissionManager;
+  requestPermission?: (request: PermissionRequest) => Promise<boolean> | boolean;
+}
+```
+
+### `PermissionRequest`
+
+```typescript
+interface PermissionRequest {
+  toolName: string;
+  toolUseId: string;
+  input: Record<string, unknown>;
+  reason: string;
 }
 ```
 
 ### `requestPermission` 的返回值格式
 
 - 返回 `true`：允许继续执行真实 tool handler
-- 返回 `false`：拒绝执行
-- 如果该回调不存在，而 `decision.behavior === "ask"`，本阶段建议直接视为拒绝
+- 返回 `false` 或其它非 `true` 值：拒绝执行
+- 如果该回调不存在，而 `decision.behavior === "ask"`，当前实现会把 `approved` 视为 `undefined`，因此直接拒绝
 
 ### `executeTool()` 的精确返回文本
 
@@ -351,15 +423,24 @@ Error: <message>
 
 **文件**: `src/cli/repl.ts`
 
-建议在 REPL 中新增一个最小确认函数：
+当前实现把确认函数放在 `src/cli/permission-prompt.ts`，REPL 只负责传入 `readline` 和 `stdout`：
 
 ```typescript
 async function requestPermissionFromUser(
-  rl: readline.Interface,
-  toolName: string,
-  input: Record<string, unknown>,
-  decision: PermissionDecision
+  rl: PermissionPromptReadline,
+  output: PermissionPromptOutput,
+  request: PermissionPromptRequest
 ): Promise<boolean>
+```
+
+### `PermissionPromptRequest`
+
+```typescript
+interface PermissionPromptRequest {
+  toolName: string;
+  reason: string;
+  input: Record<string, unknown>;
+}
 ```
 
 ### 精确 I/O 约定
@@ -367,10 +448,14 @@ async function requestPermissionFromUser(
 打印提示：
 
 ```text
-Permission required for write_file
-Reason: requires confirmation: write_file
-Approve? [y/N]:
+Permission required: write_file (requires confirmation: write_file)
+{
+  "path": "src/app.ts"
+}
+Allow this tool call? [y/N]
 ```
+
+最后一行源码里的 prompt 字符串在 `]` 后还有一个空格，用来把光标和提示文本隔开。
 
 #### 用户输入 `y` 或 `yes`
 
@@ -391,16 +476,18 @@ false
 ### 输入/输出示例
 
 ```typescript
-await requestPermissionFromUser(rl, "write_file", { path: "src/app.ts" }, {
-  behavior: "ask",
-  reason: "requires confirmation: write_file"
+await requestPermissionFromUser(rl, output, {
+  toolName: "write_file",
+  reason: "requires confirmation: write_file",
+  input: { path: "src/app.ts" }
 })
 // 用户输入: y
 // -> true
 
-await requestPermissionFromUser(rl, "bash", { command: "npm publish" }, {
-  behavior: "ask",
-  reason: "requires confirmation: bash"
+await requestPermissionFromUser(rl, output, {
+  toolName: "bash",
+  reason: "requires confirmation: bash",
+  input: { command: "npm publish" }
 })
 // 用户直接回车
 // -> false
@@ -410,6 +497,8 @@ await requestPermissionFromUser(rl, "bash", { command: "npm publish" }, {
 
 - 大小写不敏感，`Y` / `YES` 也视为允许
 - 读到 EOF 或 readline 已关闭时，返回 `false`
+- `question()` 抛出非 readline 关闭错误时，继续向外抛出，不吞掉未知异常
+- `request.input` 会用 `JSON.stringify(request.input, null, 2)` 完整打印
 
 ### 所用 Node.js 方法
 
@@ -419,7 +508,7 @@ await requestPermissionFromUser(rl, "bash", { command: "npm publish" }, {
 - **参数**:
   - `prompt: string` — 要显示的提示文本
 - **返回值**: `Promise<string>` — 用户输入内容
-- **举例场景**: `await rl.question("Approve? [y/N]: ")`
+- **举例场景**: `await rl.question("Allow this tool call? [y/N] ")`
 
 #### `process.stdout.write(text)`
 

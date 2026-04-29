@@ -81,8 +81,8 @@ interface HookResult {
 - `exitCode` 只能是 `0` / `1` / `2`
 - `message` 必须是字符串
 - `exitCode: 0` 时 `message` 应为空字符串
-- `exitCode: 1` 时 `message` 是阻止当前动作的原因
-- `exitCode: 2` 时 `message` 是要注入给模型的补充说明
+- `exitCode: 1` 时 `message` 是要注入给模型的 warning
+- `exitCode: 2` 时 `message` 是要注入给模型的 note
 
 示例：
 
@@ -120,7 +120,7 @@ interface HookRunnerOptions {
 
 - 没有注册 handler 的事件必须正常返回 continue 结果
 - handler 可以同步返回，也可以异步返回
-- handler 抛错时，本阶段建议返回 `exitCode: 1`，把错误包装成阻止原因
+- handler 抛错时，本阶段建议返回 `exitCode: 1`，把错误包装成 warning
 
 ### 所用 Node.js 方法
 
@@ -148,9 +148,7 @@ constructor(options?: HookRunnerOptions)
 ```typescript
 const hookRunner = new HookRunner({
   handlers: {
-    SessionStart: [
-      () => ({ exitCode: 2, message: "Welcome to s08 hooks." })
-    ],
+    SessionStart: [() => ({ exitCode: 2, message: "Welcome to s08 hooks." })],
     PreToolUse: [
       (event) =>
         event.payload.toolName === "bash"
@@ -273,8 +271,8 @@ await hookRunner.run("SessionStart", {
 #### 返回值处理
 
 - `exitCode: 0`: 不改动消息，直接进入主循环
-- `exitCode: 1`: 本阶段建议返回最终文本 `Hook blocked SessionStart: <message>`
-- `exitCode: 2`: 把 `message` 追加为一条用户侧补充消息，再进入主循环
+- `exitCode: 1`: 把 `message` 追加为一条用户侧 warning，再进入主循环
+- `exitCode: 2`: 把 `message` 追加为一条用户侧 note，再进入主循环
 
 #### 输入/输出示例
 
@@ -288,7 +286,7 @@ await hookRunner.run("SessionStart", {
 
 ### `PreToolUse`
 
-建议在权限检查前触发：
+建议在权限检查通过后、真实工具执行前触发：
 
 ```typescript
 await hookRunner.run("PreToolUse", {
@@ -302,14 +300,10 @@ await hookRunner.run("PreToolUse", {
 
 ##### `exitCode: 1`
 
-精确返回：
+追加 warning，然后继续真实工具执行：
 
-```typescript
-{
-  type: "tool_result",
-  toolUseId: block.id,
-  content: `Hook blocked PreToolUse: ${result.message}`
-}
+```text
+Hook warning from PreToolUse: <message>
 ```
 
 ##### `exitCode: 2`
@@ -320,11 +314,11 @@ await hookRunner.run("PreToolUse", {
 Hook note from PreToolUse: <message>
 ```
 
-然后继续进入 s07 权限检查和真实工具执行。
+然后继续进入真实工具执行。
 
 ##### `exitCode: 0`
 
-不做额外处理，继续进入 s07 权限检查。
+不做额外处理，继续进入真实工具执行。
 
 ### `PostToolUse`
 
@@ -343,13 +337,14 @@ await hookRunner.run("PostToolUse", {
 #### 返回值处理
 
 - `exitCode: 0`: 返回原始工具结果
-- `exitCode: 1`: 本阶段不重写已经完成的工具结果，建议追加说明 `Hook blocked PostToolUse: <message>`
+- `exitCode: 1`: 本阶段不重写已经完成的工具结果，追加说明 `Hook warning from PostToolUse: <message>`
 - `exitCode: 2`: 追加说明 `Hook note from PostToolUse: <message>`
 
 ### 边界情况
 
 - 没有传 `hookRunner` 时，`AgentRunner` 行为必须与 s07 一致
-- `PreToolUse` 阻止后，不应该继续执行权限检查、用户确认或真实 handler
+- 权限拒绝后，不应该继续触发 `PreToolUse`
+- `PreToolUse` 不负责阻止真实 handler；是否允许调用工具只由权限系统决定
 - 未知工具仍保持原有 `"Unknown tool: <name>"` 行为
 - 工具 handler 抛错时，仍返回原有 `Error: <message>`，再把 `isError: true` 交给 `PostToolUse`
 
@@ -369,9 +364,7 @@ await hookRunner.run("PostToolUse", {
 ```typescript
 const hookRunner = new HookRunner({
   handlers: {
-    SessionStart: [
-      () => ({ exitCode: 2, message: "s08 hook system ready." })
-    ],
+    SessionStart: [() => ({ exitCode: 2, message: "s08 hook system ready." })],
     PostToolUse: [
       (event) =>
         event.payload.isError
@@ -462,4 +455,4 @@ s08 >>
 
 `s08` 的 API 重点不是“更多工具”或“更复杂权限”，而是：
 
-**给主循环增加一组稳定扩展点，并用统一的 `HookResult` 控制继续、阻止和补充。**
+**给主循环增加一组稳定扩展点，并用统一的 `HookResult` 表达继续、warning 和 note。**

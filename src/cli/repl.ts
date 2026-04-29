@@ -1,17 +1,48 @@
 import readline from "node:readline/promises";
 import path from "node:path";
 import { stdin as input, stdout as output } from "node:process";
+import { fileURLToPath } from "node:url";
 
 import { AgentRunner, type ToolExecutionEvent } from "../core/agent-runner.js";
 import { AnthropicModelClient } from "../core/anthropic-model-client.js";
 import { Compactor } from "../core/compactor.js";
+import { HookRunner } from "../core/hook-runner.js";
 import { PermissionManager } from "../core/permission-manager.js";
 import { ToolRegistry } from "../core/tool-registry.js";
 import { TodoManager } from "../core/todo-manager.js";
 import { SkillLoader } from "../core/skill-loader.js";
-import type { AgentMessage } from "../core/types.js";
+import type { AgentMessage, AgentRunResult, ModelClient } from "../core/types.js";
 import { registerBuiltinTools } from "../tools/builtin-tools.js";
+import type { PermissionPromptOutput, PermissionPromptReadline } from "./permission-prompt.js";
 import { requestPermissionFromUser } from "./permission-prompt.js";
+
+export interface ReplReadline extends PermissionPromptReadline {
+  close(): void;
+}
+
+export interface ReplOutput extends PermissionPromptOutput {}
+
+export interface ReplRunner {
+  run(initialMessages: AgentMessage[]): Promise<AgentRunResult>;
+}
+
+export interface ReplSessionOptions {
+  rl: ReplReadline;
+  output: ReplOutput;
+  runner: ReplRunner;
+  banner?: string;
+  prompt?: string;
+}
+
+export interface ReplRunnerOptions {
+  rl: ReplReadline;
+  output: ReplOutput;
+  modelClient: ModelClient;
+  workspaceRoot?: string;
+  skillRoot?: string;
+  transcriptDir?: string;
+  permissionManager?: PermissionManager;
+}
 
 /** Extracts the "command" field from bash tool input, returns empty string if missing. */
 function readBashCommand(input: Record<string, unknown>): string {
@@ -26,38 +57,40 @@ function readSkillName(input: Record<string, unknown>): string {
 }
 
 /** Prints bash tool activity to the terminal: yellow command line before execution, output after. */
-function printToolExecution(event: ToolExecutionEvent): void {
-  if (event.toolName === "bash") {
-    if (event.phase === "before") {
-      const command = readBashCommand(event.input);
-      if (command.length > 0) {
-        output.write(`\u001B[33m$ ${command}\u001B[0m\n`);
+function createToolExecutionPrinter(output: ReplOutput): (event: ToolExecutionEvent) => void {
+  return (event: ToolExecutionEvent): void => {
+    if (event.toolName === "bash") {
+      if (event.phase === "before") {
+        const command = readBashCommand(event.input);
+        if (command.length > 0) {
+          output.write(`\u001B[33m$ ${command}\u001B[0m\n`);
+        }
+        return;
+      }
+
+      const preview = event.output.slice(0, 200).trimEnd();
+      if (preview.length > 0) {
+        output.write(`${preview}\n`);
       }
       return;
     }
 
-    const preview = event.output.slice(0, 200).trimEnd();
-    if (preview.length > 0) {
-      output.write(`${preview}\n`);
+    if (event.toolName === "todo" && event.phase === "after") {
+      output.write(`${event.output}\n`);
     }
-    return;
-  }
 
-  if (event.toolName === "todo" && event.phase === "after") {
-    output.write(`${event.output}\n`);
-  }
-
-  if (event.toolName === "load_skill") {
-    if (event.phase === "before") {
-      const skillName = readSkillName(event.input);
-      output.write(`\u001B[36m> load_skill (${skillName})\u001B[0m\n`);
-      return;
+    if (event.toolName === "load_skill") {
+      if (event.phase === "before") {
+        const skillName = readSkillName(event.input);
+        output.write(`\u001B[36m> load_skill (${skillName})\u001B[0m\n`);
+        return;
+      }
+      const preview = event.output.slice(0, 200).trimEnd();
+      if (preview.length > 0) {
+        output.write(`  ${preview}\n`);
+      }
     }
-    const preview = event.output.slice(0, 200).trimEnd();
-    if (preview.length > 0) {
-      output.write(`  ${preview}\n`);
-    }
-  }
+  };
 }
 
 /** Returns true if the error is caused by the readline interface being closed (EOF / pipe close). */
@@ -71,84 +104,122 @@ function isReadlineClosedError(error: unknown): boolean {
   );
 }
 
-/** Entry point: wires up dependencies and runs the interactive read-eval-print loop. */
-async function main(): Promise<void> {
-  const rl = readline.createInterface({ input, output });
+/** Creates a REPL runner from injected dependencies. */
+export function createReplRunner(options: ReplRunnerOptions): ReplRunner {
+  const workspaceRoot = options.workspaceRoot ?? process.cwd();
   const registry = new ToolRegistry();
   const todoManager = new TodoManager();
 
-  const modelClient = new AnthropicModelClient();
-
-  const skillLoader = new SkillLoader(path.resolve(process.cwd(), "skills"));
+  const skillLoader = new SkillLoader(options.skillRoot ?? path.resolve(workspaceRoot, "skills"));
 
   const compactor = new Compactor({
-    modelClient,
-    transcriptDir: path.resolve(process.cwd(), ".transcripts")
+    modelClient: options.modelClient,
+    transcriptDir: options.transcriptDir ?? path.resolve(workspaceRoot, ".transcripts")
   });
-  const permissionManager = new PermissionManager({ mode: "default" });
+  const permissionManager = options.permissionManager ?? new PermissionManager({ mode: "default" });
+  const hookRunner = new HookRunner({
+    handlers: {
+      SessionStart: [() => ({ exitCode: 2, message: "s08 hook system ready." })],
+      PostToolUse: [
+        (event) =>
+          event.payload.isError
+            ? { exitCode: 2, message: `${event.payload.toolName} returned an error.` }
+            : { exitCode: 0, message: "" }
+      ]
+    }
+  });
 
   registerBuiltinTools({ registry, todoManager, skillLoader });
 
   const skillDescriptions = skillLoader.getDescriptions();
   const systemPrompt = [
-    `You are a coding agent at ${process.cwd()}.`,
+    `You are a coding agent at ${workspaceRoot}.`,
     "Use load_skill to access specialized knowledge.",
     "",
     "Skills available:",
     skillDescriptions
   ].join("\n");
 
-  const runner = new AgentRunner({
-    modelClient,
+  return new AgentRunner({
+    modelClient: options.modelClient,
     toolRegistry: registry,
     todoManager,
     systemPrompt,
     compactor,
     permissionManager,
+    hookRunner,
     requestPermission: (request) =>
-      requestPermissionFromUser(rl, output, {
+      requestPermissionFromUser(options.rl, options.output, {
         toolName: request.toolName,
         reason: request.reason,
         input: request.input
       }),
-    onToolExecution: printToolExecution
+    onToolExecution: createToolExecutionPrinter(options.output),
+    workspaceRoot
   });
-
-  const history: AgentMessage[] = [];
-  output.write("s07> real model ready. Type `exit` to quit.\n");
-
-  while (true) {
-    let rawLine: string;
-    try {
-      rawLine = await rl.question("s07 >> ");
-    } catch (error) {
-      if (isReadlineClosedError(error)) {
-        break;
-      }
-      throw error;
-    }
-
-    const line = rawLine.trim();
-    if (!line || line.toLowerCase() === "exit" || line.toLowerCase() === "q") {
-      break;
-    }
-
-    history.push({ role: "user", content: line });
-
-    const result = await runner.run(history);
-    history.splice(0, history.length, ...result.messages);
-
-    if (result.finalText) {
-      output.write(`${result.finalText}\n\n`);
-    } else {
-      output.write("(no text output)\n\n");
-    }
-  }
-
-  rl.close();
 }
 
-main().catch((error) => {
-  output.write(`Fatal: ${error instanceof Error ? error.message : String(error)}\n`);
-  process.exitCode = 1;
-});
+/** Creates the real stage dependencies used by the command-line REPL. */
+export function createDefaultReplRunner(rl: ReplReadline, output: ReplOutput): ReplRunner {
+  return createReplRunner({
+    rl,
+    output,
+    modelClient: new AnthropicModelClient()
+  });
+}
+
+/** Runs the interactive read-eval-print loop with injected I/O and runner dependencies. */
+export async function runReplSession(options: ReplSessionOptions): Promise<void> {
+  const { rl, output, runner } = options;
+  const banner = options.banner ?? "s08> real model ready. Type `exit` to quit.\n";
+  const prompt = options.prompt ?? "s08 >> ";
+
+  const history: AgentMessage[] = [];
+  output.write(banner);
+
+  try {
+    while (true) {
+      let rawLine: string;
+      try {
+        rawLine = await rl.question(prompt);
+      } catch (error) {
+        if (isReadlineClosedError(error)) {
+          break;
+        }
+        throw error;
+      }
+
+      const line = rawLine.trim();
+      if (!line || line.toLowerCase() === "exit" || line.toLowerCase() === "q") {
+        break;
+      }
+
+      history.push({ role: "user", content: line });
+
+      const result = await runner.run([...history]);
+      history.splice(0, history.length, ...result.messages);
+
+      if (result.finalText) {
+        output.write(`${result.finalText}\n\n`);
+      } else {
+        output.write("(no text output)\n\n");
+      }
+    }
+  } finally {
+    rl.close();
+  }
+}
+
+/** Entry point: wires up real dependencies and runs the command-line REPL. */
+async function main(): Promise<void> {
+  const rl = readline.createInterface({ input, output });
+  const runner = createDefaultReplRunner(rl, output);
+  await runReplSession({ rl, output, runner });
+}
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
+  main().catch((error) => {
+    output.write(`Fatal: ${error instanceof Error ? error.message : String(error)}\n`);
+    process.exitCode = 1;
+  });
+}

@@ -11,7 +11,10 @@ import type { ToolExecutionContext } from "./tool-registry.js";
 import type { TodoManager } from "./todo-manager.js";
 import type { Compactor } from "./compactor.js";
 import type { PermissionManager } from "./permission-manager.js";
+import type { HookRunner } from "./hook-runner.js";
 import { ToolRegistry } from "./tool-registry.js";
+
+type ToolExecutionPart = ToolResultPart | TextPart;
 
 /** Options for constructing an AgentRunner instance. */
 export interface AgentRunnerOptions {
@@ -25,6 +28,8 @@ export interface AgentRunnerOptions {
   compactor?: Compactor;
   /** s07: 可选 PermissionManager，启用工具执行前权限判断。 */
   permissionManager?: PermissionManager;
+  /** s08: 可选 HookRunner，启用 SessionStart / PreToolUse / PostToolUse 扩展点。 */
+  hookRunner?: HookRunner;
   /** s07: ask 分支的人类确认回调。 */
   requestPermission?: (request: PermissionRequest) => Promise<boolean> | boolean;
   onToolExecution?: (event: ToolExecutionEvent) => void;
@@ -59,6 +64,20 @@ function extractText(blocks: ModelContentBlock[]): string {
   return resText.trim();
 }
 
+function createHookNote(
+  source: "SessionStart" | "PreToolUse" | "PostToolUse",
+  message: string
+): string {
+  return `Hook note from ${source}: ${message}`;
+}
+
+function createHookWarning(
+  source: "SessionStart" | "PreToolUse" | "PostToolUse",
+  message: string
+): string {
+  return `Hook warning from ${source}: ${message}`;
+}
+
 /**
  * Agent main loop orchestrator.
  * Repeatedly calls the model, executes requested tools, and feeds results back
@@ -73,6 +92,7 @@ export class AgentRunner {
   private readonly maxTurns: number;
   private readonly compactor?: Compactor;
   private readonly permissionManager?: PermissionManager;
+  private readonly hookRunner?: HookRunner;
   private readonly requestPermission?: (request: PermissionRequest) => Promise<boolean> | boolean;
   private readonly onToolExecution?: (event: ToolExecutionEvent) => void;
 
@@ -85,6 +105,7 @@ export class AgentRunner {
     this.maxTurns = options.maxTurns ?? 30;
     this.compactor = options.compactor;
     this.permissionManager = options.permissionManager;
+    this.hookRunner = options.hookRunner;
     this.requestPermission = options.requestPermission;
     this.onToolExecution = options.onToolExecution;
   }
@@ -96,6 +117,22 @@ export class AgentRunner {
    */
   async run(initialMessages: AgentMessage[]): Promise<AgentRunResult> {
     const messages = [...initialMessages];
+
+    const sessionStartResult = await this.hookRunner?.run("SessionStart", {
+      cwd: this.execContext.workspaceRoot
+    });
+    if (sessionStartResult?.exitCode === 2) {
+      messages.push({
+        role: "user",
+        content: createHookNote("SessionStart", sessionStartResult.message)
+      });
+    }
+    if (sessionStartResult?.exitCode === 1) {
+      messages.push({
+        role: "user",
+        content: createHookWarning("SessionStart", sessionStartResult.message)
+      });
+    }
 
     for (let turn = 0; turn < this.maxTurns; turn += 1) {
       // s06 Layer 1: micro_compact — 每轮静默替换旧 tool_result
@@ -120,7 +157,7 @@ export class AgentRunner {
         return { messages, finalText: extractText(response.content) };
       }
 
-      const toolExecuteResultContent: Array<ToolResultPart | TextPart> = [];
+      const toolExecuteResultContent: ToolExecutionPart[] = [];
       let usedTodo = false;
       let usedCompact = false;
 
@@ -133,7 +170,7 @@ export class AgentRunner {
             usedCompact = true;
           }
           const tooluseResult = await this.executeTool(modelToolUseBlock);
-          toolExecuteResultContent.push(tooluseResult);
+          toolExecuteResultContent.push(...tooluseResult);
         }
       }
 
@@ -207,7 +244,7 @@ export class AgentRunner {
    * catches all exceptions, and always returns a ToolResultPart
    * (never throws — errors are surfaced to the model as tool result content).
    */
-  private async executeTool(block: ModelToolUseBlock): Promise<ToolResultPart> {
+  private async executeTool(block: ModelToolUseBlock): Promise<ToolExecutionPart[]> {
     const tool = this.toolRegistry.get(block.name);
     if (typeof tool === "undefined") {
       const unknownToolMessage = `Unknown tool: ${block.name}`;
@@ -228,16 +265,37 @@ export class AgentRunner {
         isError: true
       });
 
-      return {
-        type: "tool_result",
-        toolUseId: block.id,
-        content: unknownToolMessage
-      };
+      return [
+        {
+          type: "tool_result",
+          toolUseId: block.id,
+          content: unknownToolMessage
+        }
+      ];
     }
 
     const permissionResult = await this.checkPermission(block);
     if (permissionResult !== null) {
-      return permissionResult;
+      return [permissionResult];
+    }
+
+    const resultParts: ToolExecutionPart[] = [];
+    const preToolUseResult = await this.hookRunner?.run("PreToolUse", {
+      toolName: block.name,
+      toolUseId: block.id,
+      input: block.input
+    });
+    if (preToolUseResult?.exitCode === 1) {
+      resultParts.push({
+        type: "text",
+        text: createHookWarning("PreToolUse", preToolUseResult.message)
+      });
+    }
+    if (preToolUseResult?.exitCode === 2) {
+      resultParts.push({
+        type: "text",
+        text: createHookNote("PreToolUse", preToolUseResult.message)
+      });
     }
 
     this.emitToolExecution({
@@ -259,7 +317,27 @@ export class AgentRunner {
         output: toolResult,
         isError: false
       });
-      return { type: "tool_result", toolUseId: block.id, content: toolResult };
+      resultParts.push({ type: "tool_result", toolUseId: block.id, content: toolResult });
+      const postToolUseResult = await this.hookRunner?.run("PostToolUse", {
+        toolName: block.name,
+        toolUseId: block.id,
+        input: block.input,
+        output: toolResult,
+        isError: false
+      });
+      if (postToolUseResult?.exitCode === 1) {
+        resultParts.push({
+          type: "text",
+          text: createHookWarning("PostToolUse", postToolUseResult.message)
+        });
+      }
+      if (postToolUseResult?.exitCode === 2) {
+        resultParts.push({
+          type: "text",
+          text: createHookNote("PostToolUse", postToolUseResult.message)
+        });
+      }
+      return resultParts;
     } catch (error) {
       const errorMessage = `Error: ${error instanceof Error ? error.message : String(error)}`;
       this.emitToolExecution({
@@ -270,11 +348,31 @@ export class AgentRunner {
         output: errorMessage,
         isError: true
       });
-      return {
+      resultParts.push({
         type: "tool_result",
         toolUseId: block.id,
         content: errorMessage
-      };
+      });
+      const postToolUseResult = await this.hookRunner?.run("PostToolUse", {
+        toolName: block.name,
+        toolUseId: block.id,
+        input: block.input,
+        output: errorMessage,
+        isError: true
+      });
+      if (postToolUseResult?.exitCode === 1) {
+        resultParts.push({
+          type: "text",
+          text: createHookWarning("PostToolUse", postToolUseResult.message)
+        });
+      }
+      if (postToolUseResult?.exitCode === 2) {
+        resultParts.push({
+          type: "text",
+          text: createHookNote("PostToolUse", postToolUseResult.message)
+        });
+      }
+      return resultParts;
     }
   }
 }

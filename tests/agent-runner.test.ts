@@ -1,6 +1,7 @@
 import { describe, expect, test, vi } from "vitest";
 
 import { AgentRunner } from "../src/core/agent-runner.js";
+import { HookRunner } from "../src/core/hook-runner.js";
 import { PermissionManager } from "../src/core/permission-manager.js";
 import { ToolRegistry } from "../src/core/tool-registry.js";
 import { TodoManager } from "../src/core/todo-manager.js";
@@ -11,6 +12,209 @@ import {
 } from "../src/core/types.js";
 
 describe("AgentRunner", () => {
+  test("injects a SessionStart note before the first model turn", async () => {
+    let firstTurnMessages: AgentMessage[] = [];
+    const createTurn = vi.fn(
+      async (_request: ModelTurnRequest): Promise<ModelTurnResponse> => ({
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "done" }]
+      })
+    );
+    createTurn.mockImplementationOnce(
+      async (request: ModelTurnRequest): Promise<ModelTurnResponse> => {
+        firstTurnMessages = [...request.messages];
+        return {
+          stopReason: "end_turn",
+          content: [{ type: "text", text: "done" }]
+        };
+      }
+    );
+    const runner = new AgentRunner({
+      modelClient: { createTurn },
+      toolRegistry: new ToolRegistry(),
+      todoManager: new TodoManager(),
+      systemPrompt: "",
+      workspaceRoot: "/tmp/s08-workspace",
+      hookRunner: new HookRunner({
+        handlers: {
+          SessionStart: [(event) => ({ exitCode: 2, message: `cwd=${event.payload.cwd}` })]
+        }
+      })
+    });
+
+    await runner.run([{ role: "user", content: "start" }]);
+
+    expect(firstTurnMessages).toEqual([
+      { role: "user", content: "start" },
+      { role: "user", content: "Hook note from SessionStart: cwd=/tmp/s08-workspace" }
+    ]);
+  });
+
+  test("does not let PreToolUse block a permission-approved tool handler", async () => {
+    const responses: ModelTurnResponse[] = [
+      {
+        stopReason: "tool_use",
+        content: [
+          { type: "tool_use", id: "hook-block", name: "bash", input: { command: "echo hi" } }
+        ]
+      },
+      {
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "continued" }]
+      }
+    ];
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
+    const requestPermission = vi.fn(async () => true);
+    const handler = vi.fn(async () => "tool output");
+    const registry = new ToolRegistry();
+    registry.register({ name: "bash", description: "bash", handler });
+    const runner = new AgentRunner({
+      modelClient: { createTurn },
+      toolRegistry: registry,
+      todoManager: new TodoManager(),
+      systemPrompt: "",
+      permissionManager: new PermissionManager(),
+      requestPermission,
+      hookRunner: new HookRunner({
+        handlers: {
+          PreToolUse: [() => ({ exitCode: 1, message: "blocked by hook" })]
+        }
+      })
+    });
+
+    const result = await runner.run([{ role: "user", content: "run" }]);
+    const toolResultMessage = result.messages.find(
+      (msg) => msg.role === "user" && Array.isArray(msg.content)
+    )!;
+
+    expect(requestPermission).toHaveBeenCalledTimes(1);
+    expect(handler).toHaveBeenCalledTimes(1);
+    expect(toolResultMessage.content).toEqual([
+      { type: "text", text: "Hook warning from PreToolUse: blocked by hook" },
+      { type: "tool_result", toolUseId: "hook-block", content: "tool output" }
+    ]);
+  });
+
+  test("does not run PreToolUse when permission denies the tool", async () => {
+    const responses: ModelTurnResponse[] = [
+      {
+        stopReason: "tool_use",
+        content: [
+          { type: "tool_use", id: "deny-before-hook", name: "bash", input: { command: "sudo ls" } }
+        ]
+      },
+      {
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "denied" }]
+      }
+    ];
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
+    const preHook = vi.fn(() => ({ exitCode: 0 as const, message: "" }));
+    const registry = new ToolRegistry();
+    registry.register({ name: "bash", description: "bash", handler: async () => "should not run" });
+    const runner = new AgentRunner({
+      modelClient: { createTurn },
+      toolRegistry: registry,
+      todoManager: new TodoManager(),
+      systemPrompt: "",
+      permissionManager: new PermissionManager(),
+      hookRunner: new HookRunner({ handlers: { PreToolUse: [preHook] } })
+    });
+
+    await runner.run([{ role: "user", content: "run sudo" }]);
+
+    expect(preHook).not.toHaveBeenCalled();
+  });
+
+  test("injects PreToolUse and PostToolUse notes into the tool result message", async () => {
+    const responses: ModelTurnResponse[] = [
+      {
+        stopReason: "tool_use",
+        content: [
+          { type: "tool_use", id: "notes", name: "read_file", input: { path: "README.md" } }
+        ]
+      },
+      {
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "done" }]
+      }
+    ];
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "read_file",
+      description: "read",
+      handler: async () => "file content"
+    });
+    const runner = new AgentRunner({
+      modelClient: { createTurn },
+      toolRegistry: registry,
+      todoManager: new TodoManager(),
+      systemPrompt: "",
+      permissionManager: new PermissionManager(),
+      hookRunner: new HookRunner({
+        handlers: {
+          PreToolUse: [() => ({ exitCode: 2, message: "before note" })],
+          PostToolUse: [() => ({ exitCode: 2, message: "after note" })]
+        }
+      })
+    });
+
+    const result = await runner.run([{ role: "user", content: "read" }]);
+    const toolResultMessage = result.messages.find(
+      (msg) => msg.role === "user" && Array.isArray(msg.content)
+    )!;
+
+    expect(toolResultMessage.content).toEqual([
+      { type: "text", text: "Hook note from PreToolUse: before note" },
+      { type: "tool_result", toolUseId: "notes", content: "file content" },
+      { type: "text", text: "Hook note from PostToolUse: after note" }
+    ]);
+  });
+
+  test("passes failing tool output to PostToolUse with isError true", async () => {
+    const responses: ModelTurnResponse[] = [
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "fail-post", name: "failing_tool", input: {} }]
+      },
+      {
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "recovered" }]
+      }
+    ];
+    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
+    const postHook = vi.fn(() => ({ exitCode: 0 as const, message: "" }));
+    const registry = new ToolRegistry();
+    registry.register({
+      name: "failing_tool",
+      description: "fail",
+      handler: async () => {
+        throw new Error("boom");
+      }
+    });
+    const runner = new AgentRunner({
+      modelClient: { createTurn },
+      toolRegistry: registry,
+      todoManager: new TodoManager(),
+      systemPrompt: "",
+      hookRunner: new HookRunner({ handlers: { PostToolUse: [postHook] } })
+    });
+
+    await runner.run([{ role: "user", content: "fail" }]);
+
+    expect(postHook).toHaveBeenCalledWith({
+      name: "PostToolUse",
+      payload: {
+        toolName: "failing_tool",
+        toolUseId: "fail-post",
+        input: {},
+        output: "Error: boom",
+        isError: true
+      }
+    });
+  });
+
   test("loops on tool_use and appends tool_result back to messages", async () => {
     const responses: ModelTurnResponse[] = [
       {
@@ -70,10 +274,12 @@ describe("AgentRunner", () => {
   // --- edge cases ---
 
   test("returns immediately on end_turn without tool_use", async () => {
-    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => ({
-      stopReason: "end_turn",
-      content: [{ type: "text", text: "direct answer" }]
-    }));
+    const createTurn = vi.fn(
+      async (): Promise<ModelTurnResponse> => ({
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "direct answer" }]
+      })
+    );
 
     const runner = new AgentRunner({
       modelClient: { createTurn },
@@ -106,7 +312,11 @@ describe("AgentRunner", () => {
 
     const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
     const registry = new ToolRegistry();
-    registry.register({ name: "add", description: "add", handler: async (input) => `added ${input.x}` });
+    registry.register({
+      name: "add",
+      description: "add",
+      handler: async (input) => `added ${input.x}`
+    });
 
     const runner = new AgentRunner({
       modelClient: { createTurn },
@@ -137,7 +347,11 @@ describe("AgentRunner", () => {
 
     const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
     const registry = new ToolRegistry();
-    registry.register({ name: "echo", description: "echo", handler: async (input) => String(input.v) });
+    registry.register({
+      name: "echo",
+      description: "echo",
+      handler: async (input) => String(input.v)
+    });
 
     const runner = new AgentRunner({
       modelClient: { createTurn },
@@ -193,12 +407,14 @@ describe("AgentRunner", () => {
         Array.isArray(msg.content) &&
         msg.content.some((p) => p.type === "tool_result")
     )!;
-    const toolResultPart = (toolResultMsg.content as unknown as Array<Record<string, unknown>>).find(
-      (p) => p.type === "tool_result"
-    )!;
+    const toolResultPart = (
+      toolResultMsg.content as unknown as Array<Record<string, unknown>>
+    ).find((p) => p.type === "tool_result")!;
 
     expect(handler).not.toHaveBeenCalled();
-    expect(toolResultPart.content).toBe("Permission denied: matched deny rule (bash content: sudo *)");
+    expect(toolResultPart.content).toBe(
+      "Permission denied: matched deny rule (bash content: sudo *)"
+    );
   });
 
   test("does not treat sudo text in the middle of a bash command as a deny rule", async () => {
@@ -246,7 +462,12 @@ describe("AgentRunner", () => {
       {
         stopReason: "tool_use",
         content: [
-          { type: "tool_use", id: "ask-1", name: "write_file", input: { path: "x.txt", content: "x" } }
+          {
+            type: "tool_use",
+            id: "ask-1",
+            name: "write_file",
+            input: { path: "x.txt", content: "x" }
+          }
         ]
       },
       {
@@ -311,9 +532,9 @@ describe("AgentRunner", () => {
         Array.isArray(msg.content) &&
         msg.content.some((p) => p.type === "tool_result")
     )!;
-    const toolResultPart = (toolResultMsg.content as unknown as Array<Record<string, unknown>>).find(
-      (p) => p.type === "tool_result"
-    )!;
+    const toolResultPart = (
+      toolResultMsg.content as unknown as Array<Record<string, unknown>>
+    ).find((p) => p.type === "tool_result")!;
     expect(toolResultPart.content).toContain("Unknown tool");
   });
 
@@ -349,9 +570,9 @@ describe("AgentRunner", () => {
         Array.isArray(msg.content) &&
         msg.content.some((p) => p.type === "tool_result")
     )!;
-    const toolResultPart = (toolResultMsg.content as unknown as Array<Record<string, unknown>>).find(
-      (p) => p.type === "tool_result"
-    )!;
+    const toolResultPart = (
+      toolResultMsg.content as unknown as Array<Record<string, unknown>>
+    ).find((p) => p.type === "tool_result")!;
     expect(toolResultPart.content).toBe("Unknown tool: nonexistent_tool");
     expect(requestPermission).not.toHaveBeenCalled();
   });
@@ -373,7 +594,9 @@ describe("AgentRunner", () => {
     registry.register({
       name: "failing_tool",
       description: "always fails",
-      handler: async () => { throw new Error("boom"); }
+      handler: async () => {
+        throw new Error("boom");
+      }
     });
 
     const runner = new AgentRunner({
@@ -391,18 +614,20 @@ describe("AgentRunner", () => {
         Array.isArray(msg.content) &&
         msg.content.some((p) => p.type === "tool_result")
     )!;
-    const toolResultPart = (toolResultMsg.content as unknown as Array<Record<string, unknown>>).find(
-      (p) => p.type === "tool_result"
-    )!;
+    const toolResultPart = (
+      toolResultMsg.content as unknown as Array<Record<string, unknown>>
+    ).find((p) => p.type === "tool_result")!;
     expect(toolResultPart.content).toContain("boom");
     expect(result.finalText).toBe("recovered");
   });
 
   test("throws when exceeding maxTurns", async () => {
-    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => ({
-      stopReason: "tool_use",
-      content: [{ type: "tool_use", id: "loop", name: "loop_tool", input: {} }]
-    }));
+    const createTurn = vi.fn(
+      async (): Promise<ModelTurnResponse> => ({
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "loop", name: "loop_tool", input: {} }]
+      })
+    );
 
     const registry = new ToolRegistry();
     registry.register({ name: "loop_tool", description: "loops", handler: async () => "loop" });
@@ -437,7 +662,11 @@ describe("AgentRunner", () => {
 
     const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
     const registry = new ToolRegistry();
-    registry.register({ name: "echo", description: "echo", handler: async (input) => String(input.v) });
+    registry.register({
+      name: "echo",
+      description: "echo",
+      handler: async (input) => String(input.v)
+    });
 
     const runner = new AgentRunner({
       modelClient: { createTurn },
@@ -448,9 +677,7 @@ describe("AgentRunner", () => {
 
     const result = await runner.run([{ role: "user", content: "mixed" }]);
 
-    const assistantMsg = result.messages.find(
-      (msg) => msg.role === "assistant"
-    )!;
+    const assistantMsg = result.messages.find((msg) => msg.role === "assistant")!;
     expect(assistantMsg.content).toHaveLength(2);
     expect(assistantMsg.content[0].type).toBe("text");
     expect(assistantMsg.content[1].type).toBe("tool_use");
@@ -484,10 +711,12 @@ describe("AgentRunner", () => {
   });
 
   test("does not mutate initial messages array", async () => {
-    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => ({
-      stopReason: "end_turn",
-      content: [{ type: "text", text: "ok" }]
-    }));
+    const createTurn = vi.fn(
+      async (): Promise<ModelTurnResponse> => ({
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "ok" }]
+      })
+    );
 
     const runner = new AgentRunner({
       modelClient: { createTurn },
@@ -503,10 +732,12 @@ describe("AgentRunner", () => {
   });
 
   test("passes systemPrompt and tools to model client", async () => {
-    const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => ({
-      stopReason: "end_turn",
-      content: [{ type: "text", text: "ok" }]
-    }));
+    const createTurn = vi.fn(
+      async (): Promise<ModelTurnResponse> => ({
+        stopReason: "end_turn",
+        content: [{ type: "text", text: "ok" }]
+      })
+    );
 
     const registry = new ToolRegistry();
     registry.register({ name: "my_tool", description: "my desc", handler: async () => "" });
@@ -523,9 +754,7 @@ describe("AgentRunner", () => {
     expect(createTurn).toHaveBeenCalledWith(
       expect.objectContaining({
         systemPrompt: "custom prompt",
-        tools: expect.arrayContaining([
-          expect.objectContaining({ name: "my_tool" })
-        ])
+        tools: expect.arrayContaining([expect.objectContaining({ name: "my_tool" })])
       })
     );
   });
@@ -586,15 +815,28 @@ describe("AgentRunner s03 reminder", () => {
   test("does not inject reminder when no plan exists", async () => {
     const todoManager = new TodoManager();
     const responses: ModelTurnResponse[] = [
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "t1", name: "echo", input: { v: "a" } }] },
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "t2", name: "echo", input: { v: "b" } }] },
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "t3", name: "echo", input: { v: "c" } }] },
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "t1", name: "echo", input: { v: "a" } }]
+      },
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "t2", name: "echo", input: { v: "b" } }]
+      },
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "t3", name: "echo", input: { v: "c" } }]
+      },
       { stopReason: "end_turn", content: [{ type: "text", text: "done" }] }
     ];
 
     const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
     const registry = new ToolRegistry();
-    registry.register({ name: "echo", description: "echo", handler: async (input) => String(input.v) });
+    registry.register({
+      name: "echo",
+      description: "echo",
+      handler: async (input) => String(input.v)
+    });
 
     const runner = new AgentRunner({
       modelClient: { createTurn },
@@ -621,14 +863,24 @@ describe("AgentRunner s03 reminder", () => {
     todoManager.update([{ content: "Plan exists", status: "pending" }]);
 
     const responses: ModelTurnResponse[] = [
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "r1", name: "echo", input: { v: "a" } }] },
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "r2", name: "echo", input: { v: "b" } }] },
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "r1", name: "echo", input: { v: "a" } }]
+      },
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "r2", name: "echo", input: { v: "b" } }]
+      },
       { stopReason: "end_turn", content: [{ type: "text", text: "done" }] }
     ];
 
     const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
     const registry = new ToolRegistry();
-    registry.register({ name: "echo", description: "echo", handler: async (input) => String(input.v) });
+    registry.register({
+      name: "echo",
+      description: "echo",
+      handler: async (input) => String(input.v)
+    });
 
     const runner = new AgentRunner({
       modelClient: { createTurn },
@@ -655,15 +907,28 @@ describe("AgentRunner s03 reminder", () => {
     todoManager.update([{ content: "Plan exists", status: "pending" }]);
 
     const responses: ModelTurnResponse[] = [
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "n1", name: "echo", input: { v: "1" } }] },
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "n2", name: "echo", input: { v: "2" } }] },
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "n3", name: "echo", input: { v: "3" } }] },
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "n1", name: "echo", input: { v: "1" } }]
+      },
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "n2", name: "echo", input: { v: "2" } }]
+      },
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "n3", name: "echo", input: { v: "3" } }]
+      },
       { stopReason: "end_turn", content: [{ type: "text", text: "done" }] }
     ];
 
     const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
     const registry = new ToolRegistry();
-    registry.register({ name: "echo", description: "echo", handler: async (input) => String(input.v) });
+    registry.register({
+      name: "echo",
+      description: "echo",
+      handler: async (input) => String(input.v)
+    });
 
     const runner = new AgentRunner({
       modelClient: { createTurn },
@@ -714,19 +979,48 @@ describe("AgentRunner s03 reminder", () => {
         required: ["items"]
       },
       handler: async (input) => {
-        const items = input.items as Array<{ content: string; status: "pending" | "in_progress" | "completed"; activeForm?: string }>;
+        const items = input.items as Array<{
+          content: string;
+          status: "pending" | "in_progress" | "completed";
+          activeForm?: string;
+        }>;
         return todoManager.update(items);
       }
     });
 
     // echo, echo (2 rounds), todo (resets), echo, echo, echo (3 rounds -> reminder)
     const responses: ModelTurnResponse[] = [
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "a1", name: "echo", input: { v: "1" } }] },
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "a2", name: "echo", input: { v: "2" } }] },
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "a3", name: "todo", input: { items: [{ content: "Plan", status: "pending" }] } }] },
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "a4", name: "echo", input: { v: "4" } }] },
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "a5", name: "echo", input: { v: "5" } }] },
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "a6", name: "echo", input: { v: "6" } }] },
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "a1", name: "echo", input: { v: "1" } }]
+      },
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "a2", name: "echo", input: { v: "2" } }]
+      },
+      {
+        stopReason: "tool_use",
+        content: [
+          {
+            type: "tool_use",
+            id: "a3",
+            name: "todo",
+            input: { items: [{ content: "Plan", status: "pending" }] }
+          }
+        ]
+      },
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "a4", name: "echo", input: { v: "4" } }]
+      },
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "a5", name: "echo", input: { v: "5" } }]
+      },
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "a6", name: "echo", input: { v: "6" } }]
+      },
       { stopReason: "end_turn", content: [{ type: "text", text: "done" }] }
     ];
 
@@ -753,9 +1047,9 @@ describe("AgentRunner s03 reminder", () => {
 
     // The user message right after the todo call should NOT have a reminder
     const afterTodoMsg = userMessages[userMessages.length - 2];
-    const afterTodoTextParts = (afterTodoMsg.content as Array<{ type: string; text?: string }>).filter(
-      (p) => p.type === "text"
-    );
+    const afterTodoTextParts = (
+      afterTodoMsg.content as Array<{ type: string; text?: string }>
+    ).filter((p) => p.type === "text");
     expect(afterTodoTextParts.every((p) => !p.text?.includes("<reminder>"))).toBe(true);
   });
 
@@ -764,15 +1058,28 @@ describe("AgentRunner s03 reminder", () => {
     todoManager.update([{ content: "Plan", status: "pending" }]);
 
     const responses: ModelTurnResponse[] = [
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "r1", name: "echo", input: { v: "1" } }] },
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "r2", name: "echo", input: { v: "2" } }] },
-      { stopReason: "tool_use", content: [{ type: "tool_use", id: "r3", name: "echo", input: { v: "3" } }] },
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "r1", name: "echo", input: { v: "1" } }]
+      },
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "r2", name: "echo", input: { v: "2" } }]
+      },
+      {
+        stopReason: "tool_use",
+        content: [{ type: "tool_use", id: "r3", name: "echo", input: { v: "3" } }]
+      },
       { stopReason: "end_turn", content: [{ type: "text", text: "done" }] }
     ];
 
     const createTurn = vi.fn(async (): Promise<ModelTurnResponse> => responses.shift()!);
     const registry = new ToolRegistry();
-    registry.register({ name: "echo", description: "echo", handler: async (input) => String(input.v) });
+    registry.register({
+      name: "echo",
+      description: "echo",
+      handler: async (input) => String(input.v)
+    });
 
     const runner = new AgentRunner({
       modelClient: { createTurn },
@@ -794,9 +1101,7 @@ describe("AgentRunner s03 reminder", () => {
     expect(reminderMsg).toBeDefined();
 
     const parts = reminderMsg!.content as Array<{ type: string; text?: string }>;
-    const reminderIdx = parts.findIndex(
-      (p) => p.type === "text" && p.text?.includes("<reminder>")
-    );
+    const reminderIdx = parts.findIndex((p) => p.type === "text" && p.text?.includes("<reminder>"));
     const firstToolResultIdx = parts.findIndex((p) => p.type === "tool_result");
     // Reminder text part should come before tool_result parts
     expect(reminderIdx).toBeLessThan(firstToolResultIdx);

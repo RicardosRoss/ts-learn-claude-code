@@ -64,7 +64,7 @@ flowchart TD
 | --- | --- | --- |
 | `default` | 普通交互模式 | 读操作可自动过，其它灰区问用户 |
 | `plan` | 计划 / 审查模式 | 禁止写文件和 bash 执行 |
-| `auto` | 高流畅度探索模式 | 读操作自动过，已知危险直接拒绝，其余问用户 |
+| `auto` | 高流畅度探索模式 | 当前代码保留 mode 名称，行为与 `default` 共用同一套最小策略 |
 
 ### 最小规则顺序
 
@@ -74,16 +74,19 @@ flowchart LR
     B -->|命中| C[deny]
     B -->|未命中| D[mode policy]
     D -->|已有结论| E[allow or deny]
-    D -->|无结论| F[allow rules]
-    F -->|命中| G[allow]
-    F -->|未命中| H[ask]
+    D -->|无结论| F[tool policies]
+    F -->|已有结论| G[allow / deny / ask]
+    F -->|无结论| H[allow rules]
+    H -->|命中| I[allow]
+    H -->|未命中| J[ask]
 ```
 
 推荐先做这几类最小规则：
 
 - `bash` 命令以 `sudo ` 开头时 `deny`
 - `write_file` / `edit_file` 目标路径包含 `/.git/` 或以 `.git/` 开头时 `deny`
-- `read_file`、`load_skill`、`todo`、`compact` 默认 `allow`
+- `read_file`、`load_skill`、`todo`、`compact` 通过默认 `toolPolicies` 自动 `allow`
+- 自定义 `toolPolicies` 可以覆盖只读工具的默认行为，但仍排在 deny rules 和 plan mode 之后
 
 ## 需要新建的文件
 
@@ -92,6 +95,9 @@ flowchart LR
    - 导出 `PermissionMode`
    - 导出 `PermissionRule`
    - 导出 `PermissionDecision`
+   - 导出 `PermissionCheckContext`
+   - 导出 `PermissionCheck`
+   - 导出 `PermissionToolPolicy`
    - 实现 `PermissionManager.check(toolName, input)`
    - 内部实现最小 `matchesRule(rule, toolName, input)`
 
@@ -126,7 +132,7 @@ Permission denied: matched deny rule (bash content: sudo *)
 ### 2. 用户拒绝
 
 ```text
-Permission denied by user: write_file requires confirmation
+Permission denied by user: requires confirmation: write_file
 ```
 
 ### 3. 用户允许后执行
