@@ -47,4 +47,18 @@ export class ToolRegistry {
 
     return result;
   }
+
+  /**
+   * Returns a new ToolRegistry containing only the tools whose names
+   * are in the whitelist. Does not modify the original registry.
+   */
+  filterByNames(whitelist: Set<string>): ToolRegistry {
+    let subagentToolRegistry = new ToolRegistry();
+    this.tools.forEach((tool) => {
+      if (whitelist.has(tool.name)) {
+        subagentToolRegistry.register(tool);
+      }
+    });
+    return subagentToolRegistry;
+  }
 }

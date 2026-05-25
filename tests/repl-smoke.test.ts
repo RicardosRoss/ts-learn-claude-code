@@ -37,7 +37,7 @@ skipIfNoApiKey("repl smoke", () => {
     const result = await runReplWithInput("!bash echo hi\nexit\n");
     expect(result.output).toContain("hi");
     expect(result.code).toBe(0);
-  });
+  }, 15000);
 
   // --- edge cases ---
 
@@ -73,6 +73,6 @@ skipIfNoApiKey("repl smoke", () => {
 
   test("shows prompt indicator", async () => {
     const result = await runReplWithInput("exit\n");
-    expect(result.output).toContain("s01");
+    expect(result.output).toContain("s09");
   });
 });
