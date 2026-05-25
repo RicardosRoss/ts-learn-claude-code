@@ -7,6 +7,7 @@ import { AgentRunner, type ToolExecutionEvent } from "../core/agent-runner.js";
 import { AnthropicModelClient } from "../core/anthropic-model-client.js";
 import { Compactor } from "../core/compactor.js";
 import { HookRunner } from "../core/hook-runner.js";
+import { MemoryStore } from "../core/memory-store.js";
 import { PermissionManager } from "../core/permission-manager.js";
 import { ToolRegistry } from "../core/tool-registry.js";
 import { TodoManager } from "../core/todo-manager.js";
@@ -116,6 +117,9 @@ export function createReplRunner(options: ReplRunnerOptions): ReplRunner {
     modelClient: options.modelClient,
     transcriptDir: options.transcriptDir ?? path.resolve(workspaceRoot, ".transcripts")
   });
+  const memoryStore = new MemoryStore({
+    memoryDir: path.resolve(workspaceRoot, ".memory")
+  });
   const permissionManager = options.permissionManager ?? new PermissionManager({ mode: "default" });
   const hookRunner = new HookRunner({
     handlers: {
@@ -129,7 +133,7 @@ export function createReplRunner(options: ReplRunnerOptions): ReplRunner {
     }
   });
 
-  registerBuiltinTools({ registry, todoManager, skillLoader });
+  registerBuiltinTools({ registry, todoManager, skillLoader, memoryStore });
 
   const skillDescriptions = skillLoader.getDescriptions();
   const systemPrompt = [
@@ -146,6 +150,7 @@ export function createReplRunner(options: ReplRunnerOptions): ReplRunner {
     todoManager,
     systemPrompt,
     compactor,
+    memoryStore,
     permissionManager,
     hookRunner,
     requestPermission: (request) =>
@@ -171,8 +176,8 @@ export function createDefaultReplRunner(rl: ReplReadline, output: ReplOutput): R
 /** Runs the interactive read-eval-print loop with injected I/O and runner dependencies. */
 export async function runReplSession(options: ReplSessionOptions): Promise<void> {
   const { rl, output, runner } = options;
-  const banner = options.banner ?? "s08> real model ready. Type `exit` to quit.\n";
-  const prompt = options.prompt ?? "s08 >> ";
+  const banner = options.banner ?? "s09> real model ready. Type `exit` to quit.\n";
+  const prompt = options.prompt ?? "s09 >> ";
 
   const history: AgentMessage[] = [];
   output.write(banner);

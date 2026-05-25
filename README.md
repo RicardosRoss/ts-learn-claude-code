@@ -17,18 +17,20 @@
 
 ## 当前对齐状态
 
-当前仓库工作基线已经推进到 `s07 权限系统`，本分支开始准备 `s08 Hook 系统`：
+当前仓库工作基线已经推进到 `s08 Hook 系统`，本分支开始准备 `s09 记忆系统`：
 
 - [docs/feat/s07-permissions-development.md](./docs/feat/s07-permissions-development.md)
 - [docs/feat/s07-permissions-api-reference.md](./docs/feat/s07-permissions-api-reference.md)
 - [docs/feat/s08-hooks-development.md](./docs/feat/s08-hooks-development.md)
 - [docs/feat/s08-hooks-api-reference.md](./docs/feat/s08-hooks-api-reference.md)
+- [docs/feat/s09-memory-development.md](./docs/feat/s09-memory-development.md)
+- [docs/feat/s09-memory-api-reference.md](./docs/feat/s09-memory-api-reference.md)
 
 这意味着：
 
 - 前七阶段的主干学习闭环已经落到代码与文档
 - 后续推进起点不再是旧计划里的 `s07 task system`
-- 当前阶段应从 **`s08 Hook 系统`** 开始，与官网新课程继续对齐
+- 当前阶段应从 **`s09 记忆系统`** 开始，与官网新课程继续对齐
 
 ## 当前基础结构
 
@@ -89,8 +91,8 @@ npm run repl
 | 分支                         | 官网阶段            | 核心能力                       | 仓库状态 |
 | ---------------------------- | ------------------- | ------------------------------ | -------- |
 | `lab/s07-permissions`        | `s07 权限系统`      | 意图先过安全闸门               | 已完成   |
-| `lab/s08-hooks`              | `s08 Hook 系统`     | 在固定时机扩展系统行为         | 当前阶段 |
-| `lab/s09-memory`             | `s09 记忆系统`      | 只保存跨会话仍成立的信息       | 待开始   |
+| `lab/s08-hooks`              | `s08 Hook 系统`     | 在固定时机扩展系统行为         | 已完成   |
+| `lab/s09-memory`             | `s09 记忆系统`      | 只保存跨会话仍成立的信息       | 当前阶段 |
 | `lab/s10-system-prompt`      | `s10 系统提示词`    | 将模型输入组装为流水线         | 待开始   |
 | `lab/s11-error-recovery`     | `s11 错误恢复`      | 续写、压缩恢复、退避重试       | 待开始   |
 | `lab/s12-task-system`        | `s12 任务系统`      | 持久化任务图与依赖关系         | 待开始   |

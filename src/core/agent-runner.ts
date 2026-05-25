@@ -12,6 +12,7 @@ import type { TodoManager } from "./todo-manager.js";
 import type { Compactor } from "./compactor.js";
 import type { PermissionManager } from "./permission-manager.js";
 import type { HookRunner } from "./hook-runner.js";
+import type { MemoryStore } from "./memory-store.js";
 import { ToolRegistry } from "./tool-registry.js";
 
 type ToolExecutionPart = ToolResultPart | TextPart;
@@ -30,6 +31,8 @@ export interface AgentRunnerOptions {
   permissionManager?: PermissionManager;
   /** s08: 可选 HookRunner，启用 SessionStart / PreToolUse / PostToolUse 扩展点。 */
   hookRunner?: HookRunner;
+  /** s09: 可选 MemoryStore，启用长期记忆加载。 */
+  memoryStore?: MemoryStore;
   /** s07: ask 分支的人类确认回调。 */
   requestPermission?: (request: PermissionRequest) => Promise<boolean> | boolean;
   onToolExecution?: (event: ToolExecutionEvent) => void;
@@ -93,6 +96,7 @@ export class AgentRunner {
   private readonly compactor?: Compactor;
   private readonly permissionManager?: PermissionManager;
   private readonly hookRunner?: HookRunner;
+  private readonly memoryStore?: MemoryStore;
   private readonly requestPermission?: (request: PermissionRequest) => Promise<boolean> | boolean;
   private readonly onToolExecution?: (event: ToolExecutionEvent) => void;
 
@@ -106,6 +110,7 @@ export class AgentRunner {
     this.compactor = options.compactor;
     this.permissionManager = options.permissionManager;
     this.hookRunner = options.hookRunner;
+    this.memoryStore = options.memoryStore;
     this.requestPermission = options.requestPermission;
     this.onToolExecution = options.onToolExecution;
   }
@@ -132,6 +137,14 @@ export class AgentRunner {
         role: "user",
         content: createHookWarning("SessionStart", sessionStartResult.message)
       });
+    }
+
+    // s09: load memory section and inject into conversation if non-empty
+    if (this.memoryStore) {
+      const memorySection = await this.memoryStore.loadMemorySection();
+      if (memorySection.length > 0) {
+        messages.push({ role: "user", content: memorySection });
+      }
     }
 
     for (let turn = 0; turn < this.maxTurns; turn += 1) {

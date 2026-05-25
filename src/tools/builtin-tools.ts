@@ -1,6 +1,7 @@
 import { ToolRegistry } from "../core/tool-registry.js";
 import type { TodoManager, TodoItemInput } from "../core/todo-manager.js";
 import type { SkillLoader } from "../core/skill-loader.js";
+import type { MemoryStore } from "../core/memory-store.js";
 import { runBash } from "./bash-tool.js";
 import { runRead, runWrite, runEdit } from "./file-tools.js";
 
@@ -10,6 +11,8 @@ export interface RegisterBuiltinToolsOptions {
   todoManager: TodoManager;
   /** s05: skill loader for load_skill tool. */
   skillLoader: SkillLoader;
+  /** s09: memory store for save_memory tool. */
+  memoryStore: MemoryStore;
 }
 
 const VALID_STATUSES = new Set(["pending", "in_progress", "completed"]);
@@ -74,7 +77,7 @@ function readTodoItems(input: Record<string, unknown>): TodoItemInput[] {
  * s05: bash + file tools (read/write/edit) + todo + load_skill.
  */
 export function registerBuiltinTools(options: RegisterBuiltinToolsOptions): void {
-  const { registry, todoManager, skillLoader } = options;
+  const { registry, todoManager, skillLoader, memoryStore } = options;
 
   registry.register({
     name: "bash",
@@ -195,5 +198,33 @@ export function registerBuiltinTools(options: RegisterBuiltinToolsOptions): void
       }
     },
     handler: async () => "Compressing..."
+  });
+
+  // s09: save_memory tool — save a long-term memory entry
+  registry.register({
+    name: "save_memory",
+    description: "Save information worth preserving across sessions.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        name: { type: "string", description: "Stable short name for this memory" },
+        description: { type: "string", description: "One-line summary" },
+        type: {
+          type: "string",
+          enum: ["user", "feedback", "project", "reference"],
+          description: "Memory category"
+        },
+        content: { type: "string", description: "Full memory content" }
+      },
+      required: ["name", "description", "type", "content"]
+    },
+    handler: async (input) => {
+      const name = readString(input, "name");
+      const description = readString(input, "description");
+      const type = readString(input, "type");
+      const content = readString(input, "content");
+      const saved = await memoryStore.saveMemory({ name, description, type: type as "user" | "feedback" | "project" | "reference", content });
+      return `Saved memory: ${saved.name} [${saved.type}]`;
+    }
   });
 }

@@ -17,18 +17,20 @@ See:
 
 ## Current Alignment Status
 
-The current working baseline has advanced through `s07 Permissions`, and this branch prepares `s08 Hooks`:
+The current working baseline has advanced through `s08 Hooks`, and this branch prepares `s09 Memory`:
 
 - [docs/feat/s07-permissions-development.md](./docs/feat/s07-permissions-development.md)
 - [docs/feat/s07-permissions-api-reference.md](./docs/feat/s07-permissions-api-reference.md)
 - [docs/feat/s08-hooks-development.md](./docs/feat/s08-hooks-development.md)
 - [docs/feat/s08-hooks-api-reference.md](./docs/feat/s08-hooks-api-reference.md)
+- [docs/feat/s09-memory-development.md](./docs/feat/s09-memory-development.md)
+- [docs/feat/s09-memory-api-reference.md](./docs/feat/s09-memory-api-reference.md)
 
 That means:
 
 - The first seven stages already exist in code and docs
 - The next stage is no longer the old planned `s07 task system`
-- Current work should resume from **`s08 Hooks`** to keep matching the upstream course
+- Current work should resume from **`s09 Memory`** to keep matching the upstream course
 
 ## Current Base Structure
 
@@ -89,8 +91,8 @@ npm run repl
 | Branch                       | Upstream lesson          | Core capability                                          | Repo status |
 | ---------------------------- | ------------------------ | -------------------------------------------------------- | ----------- |
 | `lab/s07-permissions`        | `s07 Permissions`        | execution intent passes through a permission gate        | Completed   |
-| `lab/s08-hooks`              | `s08 Hooks`              | inject behavior at fixed lifecycle points                | Current     |
-| `lab/s09-memory`             | `s09 Memory`             | persist only cross-session knowledge that remains useful | Pending     |
+| `lab/s08-hooks`              | `s08 Hooks`              | inject behavior at fixed lifecycle points                | Completed   |
+| `lab/s09-memory`             | `s09 Memory`             | persist only cross-session knowledge that remains useful | Current     |
 | `lab/s10-system-prompt`      | `s10 System Prompt`      | build model input as a pipeline                          | Pending     |
 | `lab/s11-error-recovery`     | `s11 Error Recovery`     | continue/retry/recover instead of crashing               | Pending     |
 | `lab/s12-task-system`        | `s12 Task System`        | persistent task graph and dependencies                   | Pending     |
