@@ -532,9 +532,9 @@ describe("AgentRunner", () => {
         Array.isArray(msg.content) &&
         msg.content.some((p) => p.type === "tool_result")
     )!;
-    const toolResultPart = (
-      toolResultMsg.content as unknown as Array<Record<string, unknown>>
-    ).find((p) => p.type === "tool_result")!;
+    const toolResultPart = (toolResultMsg.content as unknown as Array<Record<string, unknown>>).find(
+      (p) => p.type === "tool_result"
+    )!;
     expect(toolResultPart.content).toContain("Unknown tool");
   });
 
@@ -614,9 +614,9 @@ describe("AgentRunner", () => {
         Array.isArray(msg.content) &&
         msg.content.some((p) => p.type === "tool_result")
     )!;
-    const toolResultPart = (
-      toolResultMsg.content as unknown as Array<Record<string, unknown>>
-    ).find((p) => p.type === "tool_result")!;
+    const toolResultPart = (toolResultMsg.content as unknown as Array<Record<string, unknown>>).find(
+      (p) => p.type === "tool_result"
+    )!;
     expect(toolResultPart.content).toContain("boom");
     expect(result.finalText).toBe("recovered");
   });
